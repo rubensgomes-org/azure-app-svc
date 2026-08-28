@@ -31,20 +31,20 @@ Excluded: `gradle-catalog` (no Java, not Spring Boot, has its own 93-line
 
 The same nine steps in each of the nine repositories.
 
-- [ ] Confirm the tree is still clean and on `main`; abort that repo if not.
-- [ ] Branch `docs-standards-conformance`, matching this project.
-- [ ] Copy this project's `CLAUDE.md` over the existing one.
-- [ ] Javadoc removals: the two `private static` methods in
+- [x] Confirm the tree is still clean and on `main`; abort that repo if not.
+- [x] Branch `docs-standards-conformance`, matching this project.
+- [x] Copy this project's `CLAUDE.md` over the existing one.
+- [x] Javadoc removals: the two `private static` methods in
       `GlobalErrorController`, the `HelloWorldRestController` constructor.
-- [ ] Delete the `// NOTE:` block duplicating the Javadoc above it.
-- [ ] Pattern documentation: observer rationale on both event listeners,
+- [x] Delete the `// NOTE:` block duplicating the Javadoc above it.
+- [x] Pattern documentation: observer rationale on both event listeners,
       value-object contract on `ErrorResponse`, centralised-error-handling and
       null-object patterns on `GlobalErrorController`.
-- [ ] Wildcard import in `AppTest`, its missing class Javadoc, and the
+- [x] Wildcard import in `AppTest`, its missing class Javadoc, and the
       redundant `@Autowired` on the sole constructor.
-- [ ] `./gradlew spotlessApply build` -- must stay green, tests must not move,
+- [x] `./gradlew spotlessApply build` -- must stay green, tests must not move,
       and the JaCoCo 90% gate must still pass. Abort that repo on failure.
-- [ ] Commit in two parts, mirroring this project's history: the `CLAUDE.md`
+- [x] Commit in two parts, mirroring this project's history: the `CLAUDE.md`
       revision, then the Javadoc alignment. Push the branch.
 
 `APP_SERVICE.md` is NOT copied anywhere. It documents this project's Azure
@@ -52,8 +52,8 @@ resource and belongs to it, the same way `ACR.md` belongs to `azure-acr`.
 
 ## Verify
 
-- [ ] All nine builds green, `35 tests, 0 failures` in each.
-- [ ] Nine branches pushed; report the PR URL for each.
+- [x] All nine builds green, `35 tests, 0 failures` in each.
+- [x] Nine branches pushed; report the PR URL for each.
 
 ## Risks
 
@@ -82,4 +82,40 @@ resource and belongs to it, the same way `ACR.md` belongs to `azure-acr`.
 
 ## Review
 
-(to be filled in when the work is done)
+All nine repositories done, plus `azure-app-svc` itself. Ten repositories now
+carry an identical `CLAUDE.md` and identical sources modulo package name. Every
+build green: 35 tests, 0 failures, 0 errors, 0 javadoc warnings, JaCoCo gate
+holding in each.
+
+The rollout was NOT done by replaying the ten edits nine times. A verification
+pass first confirmed that every target file was byte-identical to this
+project's pre-change baseline (`6affe3a`) once the package name was normalised,
+that all nine `CLAUDE.md` matched the old version exactly, and that the doclint
+anchor appeared exactly once in each `app/build.gradle.kts`. All nine verified
+clean, so the final files could be copied wholesale with the package
+substituted -- which guarantees a converged end state rather than nine
+independent replays that could each drift.
+
+One edit was made here first to enable that: the cross-reference on
+`AppShutdownEventListener` was package-qualified, which would have needed
+per-repository rewriting. Simplifying it to a same-package `{@link
+AppInitEventListener}` made every propagated file package-agnostic apart from
+its own `package` and `import` lines.
+
+The doclint decision was settled before the rollout rather than after, as
+proposed. `Xdoclint:all,-missing` turns off only the missing-comment check --
+the one that conflicts with the rules forbidding Javadoc on private members and
+constructors -- and keeps the checks that catch real defects: broken `@link`
+targets, malformed HTML, bad `@param` names. Without it the standard would have
+propagated a permanently noisy build to nine more repositories. It also cleared
+the five pre-existing default-constructor warnings.
+
+`spring-blueprint` was included on an explicit yes. It is the template the
+eight `azure-*` projects were scaffolded from, so future scaffolds now start
+from the revised standards rather than needing this pass again.
+
+Each repository got two commits on a `docs-standards-conformance` branch, the
+branch pushed, then a `--no-ff` merge to `main` and `main` pushed. Every
+repository is on `main`, clean, and in sync with its remote.
+
+`APP_SERVICE.md` was copied nowhere, as planned.
