@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: MIT
+#
+# This file may contain content generated or assisted by Artificial Intelligence
+# tools and subsequently reviewed and modified by human contributors.
+# See the LICENSE file for licensing terms and additional AI disclosures.
+
+# ---------------------------------------------------------------------------
+# DESTRUCTIVE. Deletes an entire repository -- every tag and every manifest --
+# from an Azure Container Registry.
+#
+# The body lives in rubensgomes-org/azure-workflows, including both safeguards:
+# the actor allowlist and the typed confirmation phrase, which run BEFORE any
+# Azure credential is touched.
+#
+# The confirm input's description is what the operator reads before typing, so
+# it is spelled out in full here rather than summarised.
+#
+# @author Rubens Gomes
+# ---------------------------------------------------------------------------
+name: acr-repo-delete
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Image namespace. With artifactId this forms the repository <environment>/<artifactId>.'
+        required: false
+        default: dev
+        type: string
+      registry_name:
+        description: 'Name of the EXISTING Azure Container Registry to delete from (not the login server).'
+        required: false
+        default: rubensdevacr
+        type: string
+      confirm:
+        description: >
+          EVERY TAG AND MANIFEST IN THE REPOSITORY IS DELETED PERMANENTLY.
+          There is no soft-delete and no recycle bin. Push anything you care
+          about elsewhere first.
+          SAFEGUARD: type EXACTLY "DELETE REPO <environment>/<artifactId>" --
+          e.g. DELETE REPO dev/azure-app-svc
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acr-repo-delete
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    uses: rubensgomes-org/azure-workflows/.github/workflows/acr-repo-delete.yml@v1
+    with:
+      environment: ${{ inputs.environment }}
+      registry-name: ${{ inputs.registry_name }}
+      confirm: ${{ inputs.confirm }}
+    secrets:
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

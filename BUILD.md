@@ -792,19 +792,21 @@ Cloning this project as a template means replacing `sonar.organization`,
 
 ## Continuous integration
 
-Two workflows, both `workflow_dispatch` only:
+Four workflows, all `workflow_dispatch` only:
 
-| Workflow           | Writes to the repo?                            |
-|--------------------|------------------------------------------------|
-| `build-verify.yml` | No — `permissions: contents: read`             |
-| `release.yml`      | **Yes** — commits, a tag, the `release` branch |
+| Workflow               | Writes to the repo?                            | Writes elsewhere?             |
+|------------------------|------------------------------------------------|-------------------------------|
+| `build-verify.yml`     | No — `permissions: contents: read`             | No                            |
+| `release.yml`          | **Yes** — commits, a tag, the `release` branch | No                            |
+| `acr-build-deploy.yml` | No                                             | An image, to Azure            |
+| `acr-repo-delete.yml`  | No                                             | **Deletes** an ACR repository |
 
 `release.yml` is covered under [Releasing from CI](#releasing-from-ci). The rest
 of this section is about `build-verify.yml`.
 
 ### The workflows are shared, not local
 
-Both files in `.github/workflows/` are **stubs**. The body of each lives in
+All four files in `.github/workflows/` are **stubs**. The body of each lives in
 [`rubensgomes-org/azure-workflows`](https://github.com/rubensgomes-org/azure-workflows)
 and is shared with every other `rubensgomes-org` Spring Boot repository, so a CI
 change lands once instead of ten times.
@@ -815,10 +817,12 @@ form), the `permissions`, and the `concurrency` group. **To change what a
 workflow does, change it in `azure-workflows`** — editing the stub here only
 changes how it is invoked.
 
-| Shared component    | Does                                            | Used by      |
-|---------------------|-------------------------------------------------|--------------|
-| `setup-java-gradle` | `setup-java` (`microsoft` 25) + `setup-gradle`  | both         |
-| `gradle-build`      | `compile` → `test` → `check` → `assemble`       | build-verify |
+| Shared component      | Does                                              | Used by                        |
+|-----------------------|---------------------------------------------------|--------------------------------|
+| `setup-java-gradle`   | `setup-java` (`microsoft` 25) + `setup-gradle`    | all three Gradle workflows     |
+| `gradle-build`        | `compile` → `test` → `check` → `assemble`         | build-verify, acr-build-deploy |
+| `azure-login`         | `az login` as a service principal                 | both ACR workflows             |
+| `verify-acr-registry` | assert a registry exists, return its login server | both ACR workflows             |
 
 Three constraints explain the shape of all this:
 
@@ -855,11 +859,11 @@ One job, `build-verify`, on `ubuntu-latest`: checkout, `setup-java-gradle`,
 | `assemble` | `:app:build`                    | `bootJar`, `applicationJar`, `generateDotEnv`        | `gradle-build` |
 | `sonar`    | `:app:sonar`                    | `sonarResolver`, `sonar`                             | workflow       |
 
-`assemble` is new since the workflows became shared: `applicationJar` and
-`generateDotEnv` hang off `tasks.build`, **not** off `check`, and the shared
-action produces them because the ACR deploy workflow needs the jar and the
-`.env`. This project ignores both — they are gitignored build outputs, so
-nothing is dirtied.
+`assemble` exists because `applicationJar` and `generateDotEnv` hang off
+`tasks.build`, **not** off `check` — `:app:check` reaches neither. Without it
+there is no `azure-app-svc-spring-boot.jar` for the Dockerfile and no `.env`.
+`build-verify` does not need either, but `acr-build-deploy.yml` does, and both
+call the same `gradle-build` action.
 
 ### Why five invocations instead of one
 

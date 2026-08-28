@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+#
+# This file may contain content generated or assisted by Artificial Intelligence
+# tools and subsequently reviewed and modified by human contributors.
+# See the LICENSE file for licensing terms and additional AI disclosures.
+
+# ---------------------------------------------------------------------------
+# Builds the application and its container image, pushes the image to an
+# EXISTING Azure Container Registry, verifies the push, smoke-tests the image
+# and purges the untagged manifests it orphaned.
+#
+# The body lives in rubensgomes-org/azure-workflows. The inputs are repeated
+# here because a reusable workflow cannot define the dispatch form.
+#
+# This workflow does not create registries; azure-iac does.
+#
+# @author Rubens Gomes
+# ---------------------------------------------------------------------------
+name: acr-build-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Image namespace, used as <environment>/<artifactId>:<tag>.'
+        required: false
+        default: dev
+        type: string
+      tag:
+        description: 'Image tag. Empty defaults to the application version (APP_VERSION in .env).'
+        required: false
+        type: string
+      registry_name:
+        description: 'Name of the EXISTING Azure Container Registry to push to (not the login server).'
+        required: false
+        default: rubensdevacr
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acr-build-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: rubensgomes-org/azure-workflows/.github/workflows/acr-build-deploy.yml@v1
+    with:
+      environment: ${{ inputs.environment }}
+      tag: ${{ inputs.tag }}
+      registry-name: ${{ inputs.registry_name }}
+    secrets:
+      packages-token: ${{ secrets.RUBENS_PAT_TOKEN }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
