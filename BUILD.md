@@ -697,8 +697,9 @@ verify before uploading.
 ./gradlew release
 ```
 
-Strips `-SNAPSHOT`, tags, merges to the `release` branch, bumps to the next
-snapshot, and pushes.
+Strips `-SNAPSHOT`, tags, bumps to the next snapshot, and pushes. It does
+**not** merge to a `release` branch: `pushReleaseVersionBranch` is deliberately
+unset, so a release is identified by its tag alone.
 
 **Preconditions:**
 
@@ -735,7 +736,7 @@ repository. That difference drives everything else about it:
 
 | Setting                                              | Why                                                                                                                                            |
 |------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| `permissions: contents: write`                       | It pushes two commits, a tag, and the `release` branch                                                                                         |
+| `permissions: contents: write`                       | It pushes two commits and a tag. No `release` branch — `pushReleaseVersionBranch` is deliberately unset, so a release is identified by its tag |
 | `ref: main`, `fetch-depth: 0` on checkout            | `requireBranch` is `main`, and the plugin diffs local against remote — a shallow or detached checkout breaks the branch check and tag creation |
 | `token: ${{ secrets.RUBENS_PAT_TOKEN }}` on checkout | The token checkout persists is what the plugin's own `git push` uses. It must be a PAT — see below                                             |
 | `concurrency`, `cancel-in-progress: false`           | Two releases would race to tag from the same starting point, and interrupting a half-finished release leaves tags and commits inconsistent     |
@@ -797,7 +798,7 @@ Four workflows, all `workflow_dispatch` only:
 | Workflow               | Writes to the repo?                            | Writes elsewhere?             |
 |------------------------|------------------------------------------------|-------------------------------|
 | `build-verify.yml`     | No — `permissions: contents: read`             | No                            |
-| `release.yml`          | **Yes** — commits, a tag, the `release` branch | No                            |
+| `release.yml`          | **Yes** — two commits and a tag                | No                            |
 | `acr-build-deploy.yml` | No                                             | An image, to Azure            |
 | `acr-repo-delete.yml`  | No                                             | **Deletes** an ACR repository |
 

@@ -114,7 +114,7 @@ quietly resolving whatever is newest. Details in
 | `./gradlew build`                           | Format check + tests + coverage gate + all artifacts |
 | `./gradlew spotlessApply`                   | Reformat sources                                     |
 | `./gradlew publishToMavenLocal`             | Install to `~/.m2`                                   |
-| `./gradlew release`                         | Tag, merge to `release`, bump (prefer the workflow)  |
+| `./gradlew release`                         | Tag and bump the version (prefer the workflow)       |
 | `./gradlew :app:dependencies --write-locks` | Regenerate the `:app` dependency lock files          |
 | `gh workflow run build-verify.yml`          | Run the build + Sonar gate in CI                     |
 | `gh workflow run release.yml`               | Cut a release from CI                                |
