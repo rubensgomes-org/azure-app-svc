@@ -11,6 +11,11 @@ import org.springframework.stereotype.Component;
 /**
  * Handles application shutdown to properly release resources.
  *
+ * <p>The shutdown half of the observer pattern described on {@link
+ * com.rubensgomes.azure.appsvc.event.AppInitEventListener}: {@link ContextClosedEvent} is published
+ * on SIGTERM, so orderly-shutdown logging is a subscriber rather than a shutdown hook registered by
+ * hand.
+ *
  * @author <a href="https://rubensgomes.com">Rubens Gomes</a>
  */
 @Slf4j
