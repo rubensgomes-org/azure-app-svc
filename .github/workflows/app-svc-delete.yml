@@ -1,0 +1,256 @@
+# SPDX-License-Identifier: MIT
+#
+# This file may contain content generated or assisted by Artificial Intelligence
+# tools and subsequently reviewed and modified by human contributors.
+# See the LICENSE file for licensing terms and additional AI disclosures.
+
+# ---------------------------------------------------------------------------
+# DESTRUCTIVE. Tears down the App Service and then the ACR repository whose
+# image it was running. Neither has a soft-delete and neither has a recycle bin.
+#
+# Two safeguards run BEFORE any Azure credential is touched: the actor must
+# equal ALLOWED_ACTOR, and the caller must have typed
+# "DELETE REPO <environment>/<artifactId>" exactly. The phrase is built from the
+# RESOLVED repository, so it cannot be satisfied by guessing. Keep the sign-in
+# step after them; a denial must be able to say Azure was never contacted.
+#
+# ONE typed phrase gates both halves: it is checked here and then handed to the
+# shared acr-repo-delete workflow, which validates it again against its own
+# resolved repository. The duplication is deliberate defence in depth.
+#
+# Unlike the other workflows here this one is NOT a pure stub -- the "az webapp"
+# steps are inline, because azure-workflows has no App Service reusable workflow
+# yet. If another repository needs the same teardown, promote the
+# delete-app-service job there and reduce this file to a stub.
+#
+# The App Service, its plan and its resource group are created by azure-iac.
+# This workflow deletes the app only; the plan and the group stay.
+#
+# @author Rubens Gomes
+# ---------------------------------------------------------------------------
+name: app-svc-delete
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: 'Resource group holding the App Service to delete.'
+        required: false
+        default: rg-dev-app
+        type: string
+      app_name:
+        description: 'Name of the App Service (web app) to delete. Its plan and resource group are left alone.'
+        required: false
+        default: azure-app-svc
+        type: string
+      environment:
+        description: 'Image namespace. With artifactId this forms the repository <environment>/<artifactId>.'
+        required: false
+        default: dev
+        type: string
+      registry_name:
+        description: 'Name of the EXISTING Azure Container Registry to delete from (not the login server).'
+        required: false
+        default: rubensdevacr
+        type: string
+      confirm:
+        description: >
+          THE APP SERVICE IS DELETED PERMANENTLY, AND SO IS EVERY TAG AND
+          MANIFEST IN ITS ACR REPOSITORY. There is no soft-delete and no
+          recycle bin. Push anything you care about elsewhere first.
+          SAFEGUARD: type EXACTLY "DELETE REPO <environment>/<artifactId>" --
+          e.g. DELETE REPO dev/azure-app-svc
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-svc-delete
+  cancel-in-progress: false
+
+jobs:
+  delete-app-service:
+    name: delete-app-service
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      RESOURCE_GROUP: ${{ inputs.resource_group }}
+      APP_NAME: ${{ inputs.app_name }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      ALLOWED_ACTOR: rubensgomes
+
+    steps:
+      # Only to read app/gradle.properties. No build runs here.
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Resolve the repository coordinates
+        id: repo
+        shell: bash
+        env:
+          ARTIFACT_PROPERTIES_PATH: app/gradle.properties
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the repository coordinates"
+          echo "=============================================================="
+          set -euo pipefail
+          artifact_id="$(sed -n 's/^artifactId=//p' "$ARTIFACT_PROPERTIES_PATH")"
+          if [ -z "$artifact_id" ]; then
+            echo "artifactId not found in ${ARTIFACT_PROPERTIES_PATH}" >&2
+            exit 1
+          fi
+          if [ -z "${ENVIRONMENT:-}" ]; then
+            echo "The environment input resolved to empty." >&2
+            exit 1
+          fi
+          echo "repository=${ENVIRONMENT}/${artifact_id}" >> "$GITHUB_OUTPUT"
+          echo "Target repository: ${ENVIRONMENT}/${artifact_id}"
+
+      # MUST stay ahead of the sign-in step, so a denial can truthfully report
+      # that Azure was never contacted.
+      - name: SAFEGUARD - Validate actor and confirmation phrase
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ steps.repo.outputs.repository }}
+          TYPED_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: SAFEGUARD - Validate actor and confirmation phrase"
+          echo "=============================================================="
+          set -euo pipefail
+          if [ "$ACTOR" != "$ALLOWED_ACTOR" ]; then
+            echo "Denied: only '${ALLOWED_ACTOR}' may run this workflow." >&2
+            echo "Actor: '${ACTOR}'." >&2
+            exit 1
+          fi
+          # Built from the RESOLVED repository, so the phrase proves the caller
+          # knows what will actually be deleted.
+          expected_phrase="DELETE REPO ${REPOSITORY}"
+          if [ "$TYPED_CONFIRM" != "$expected_phrase" ]; then
+            echo "Denied: confirmation phrase did not match exactly." >&2
+            echo "Expected: ${expected_phrase}" >&2
+            echo "Got:      ${TYPED_CONFIRM}" >&2
+            echo "" >&2
+            echo "Nothing was deleted and Azure was never contacted." >&2
+            exit 1
+          fi
+          echo "Safeguard passed. This run will delete:"
+          echo "  App Service:    ${APP_NAME} (resource group ${RESOURCE_GROUP})"
+          echo "  ACR repository: ${REPOSITORY}"
+
+      - name: Sign in to Azure
+        uses: rubensgomes-org/azure-workflows/.github/actions/azure-login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Deliberately "az webapp list" and not "show": "show" cannot distinguish
+      # "absent" from "the subscription could not be reached", so a transient
+      # outage would look like a successful no-op and the run would go green
+      # having deleted nothing.
+      - name: Check whether the App Service exists
+        id: exists
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Check whether the App Service exists"
+          echo " az webapp list --resource-group ${RESOURCE_GROUP}"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! webapps="$(az webapp list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list the App Services in '${RESOURCE_GROUP}'." >&2
+            echo "That is a subscription- or resource-group-level failure -- a" >&2
+            echo "network or token problem, a principal without read access, or" >&2
+            echo "a group that does not exist -- and NOT a missing app." >&2
+            echo "Nothing was deleted." >&2
+            exit 1
+          fi
+          # -F -x: whole line, literal. A substring match would let
+          # "azure-app-svc" be satisfied by "azure-app-svc-legacy".
+          if ! printf '%s\n' "$webapps" | grep -Fxq "$APP_NAME"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "App Service '${APP_NAME}' is not in '${RESOURCE_GROUP}'."
+            echo "Nothing to delete; the delete step will be skipped."
+            exit 0
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "App Service '${APP_NAME}' exists and will be PERMANENTLY deleted."
+
+      - name: Delete the App Service
+        if: steps.exists.outputs.exists == 'true'
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Delete the App Service"
+          echo " az webapp delete --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          az webapp delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}"
+
+      # Reads the state back: a delete that reported success but left the app
+      # behind must fail the run, not pass it.
+      - name: Verify the App Service no longer exists
+        shell: bash
+        env:
+          EXISTED: ${{ steps.exists.outputs.exists }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Verify the App Service no longer exists"
+          echo " az webapp show --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          if show_output="$(az webapp show --resource-group "${RESOURCE_GROUP}" --name "${APP_NAME}" 2>&1)"; then
+            printf '%s\n' "$show_output"
+            echo "" >&2
+            echo "App Service '${APP_NAME}' is STILL in '${RESOURCE_GROUP}'." >&2
+            echo "The delete step reported success, so it did not take effect." >&2
+            exit 1
+          fi
+          echo "'az webapp show' failed, which is what a deleted app looks like:"
+          # sed, not ${var//}, because this indents EVERY line.
+          # shellcheck disable=SC2001
+          printf '%s\n' "$show_output" | sed 's/^/  /'
+          echo ""
+          # A non-zero "show" is ALSO what an expired token or a network failure
+          # looks like, so absence is only believed once the group lists cleanly.
+          if ! webapps="$(az webapp list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "But '${RESOURCE_GROUP}' could not be listed either, so the" >&2
+            echo "failure above is not proof of absence. Re-run to verify." >&2
+            exit 1
+          fi
+          if printf '%s\n' "$webapps" | grep -Fxq "$APP_NAME"; then
+            echo "'${APP_NAME}' is absent from 'show' but present in 'list'." >&2
+            echo "The deletion is not complete. Re-run to verify." >&2
+            exit 1
+          fi
+          if [ "$EXISTED" = "true" ]; then
+            echo "Deleted. '${APP_NAME}' is gone from '${RESOURCE_GROUP}'."
+          else
+            echo "Nothing was deleted. '${APP_NAME}' was already absent from '${RESOURCE_GROUP}'."
+          fi
+
+  # A reusable workflow can only be called from a job, never from a step, so
+  # the ACR teardown is a second job rather than a third step. "needs" is what
+  # orders it after the App Service is confirmed gone.
+  delete-acr-repository:
+    needs: delete-app-service
+    uses: rubensgomes-org/azure-workflows/.github/workflows/acr-repo-delete.yml@v1
+    with:
+      environment: ${{ inputs.environment }}
+      registry-name: ${{ inputs.registry_name }}
+      confirm: ${{ inputs.confirm }}
+    # Mapped EXPLICITLY. "secrets: inherit" forwards only secrets whose names
+    # match the callee's declarations, so it would map none of these.
+    secrets:
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
