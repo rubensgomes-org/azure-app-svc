@@ -45,34 +45,49 @@ belongs on AKS or Container Apps instead.
 
 ### App Service Settings
 
-The web app, its plan and its resource group are created by the **azure-iac**
-project, not by this repository. This repository only builds and publishes the
-image the app runs.
+- Subscription: rubens-pay-as-go-subscription
+- Resource Group: rg-dev-app
+- Instance Name: azure-app-svc
+- Region: Central US
+- Registry: rubensdevacr
+- Authentication: managed identity
+- Identity: id-dev-app
+- Image: dev/azure-app-svc
+- Tag: 0.0.1-SNAPSHOT
+- Port: 80
+- Enable public access: On
+- Enable virtual networking integration: Off
+- Tag: ai-200-training=azure-app-svc
+- Image:Tag rubensdevacr.azurecr.io/dev/azure-app-svc:0.0.1-SNAPSHOT
+
+The web app, and its plan are created manually from within the Azure Portal 
+App Services - > crete, not by this repository. This repository only builds and 
+publishes the image the app runs.
 
 1. Create the web app in the same Azure region as the ACR registry it pulls
    from, so image pulls stay inside Azure.
 2. Use a **Linux** plan. The image is a Linux container built on
    `eclipse-temurin`; Windows plans cannot run it.
-3. Grant the web app a system-assigned managed identity and give that identity
-   the `AcrPull` role on `rubensdevacr`. Do not configure a registry password.
+3. Grant the web app a user-assigned managed identity provisioned in the 
+   `azure-iac` repo project. Do not configure a registry password.
 4. Deployment uses a headless service identity (a Service Principal), the same
    four `AZURE_*` secrets the ACR workflow already consumes.
 
-> The names below are **placeholders**. Substitute the real values from
-> `azure-iac`; the next section exports them once and every command reads
-> them from there.
+> These are the real values, and they match the `export` block in the next
+> section and the App Service Settings above. Every command below reads them
+> from there.
 
 #### Resources
 
-- resource group: `rubens-dev-rg`
-- App Service Plan: `rubens-dev-plan` (Linux)
+- resource group: `rg-dev-app`
+- App Service Plan: <TODO: Azure Portal manual provisioning> (Linux)
 - web app name: `azure-app-svc`
-- default hostname: `azure-app-svc.azurewebsites.net`
+- default hostname: <TODO: to be resolved after app service is provisioned>
 
 #### Container
 
 - image: `rubensdevacr.azurecr.io/dev/azure-app-svc:0.0.1-SNAPSHOT`
-- registry auth: system-assigned managed identity with `AcrPull`
+- registry auth: the user-assigned managed identity `id-dev-app`, with `AcrPull`
 
 #### Required app settings
 
@@ -95,58 +110,16 @@ the web app is selected. They all take the same names and identifiers, so
 export them once and every later example stays short:
 
 ```bash
-export RG=rubens-dev-rg
-export APP=azure-app-svc
-export PLAN=rubens-dev-plan
+export RESOURCE_GROUP='rg-dev-app'
+export APP_NAME='azure-app-svc'
 
 # Read these back from Azure rather than assembling them by hand.
 # "<name>.azurewebsites.net" hardcodes the public-cloud suffix, and the
 # resource id is what "az monitor" takes as --resource.
-export APP_HOST=$(az webapp show --resource-group "$RG" --name "$APP" \
+export APP_HOST=$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --query defaultHostName --output tsv)
-export RESOURCE_ID=$(az webapp show --resource-group "$RG" --name "$APP" \
+export RESOURCE_ID=$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --query id --output tsv)
-```
-
-#### View and list
-
-```bash
-# Every web app the signed-in identity can see, with its state and location.
-az webapp list --output table
-
-# Only the ones in this resource group.
-az webapp list --resource-group "$RG" --output table
-
-# One app. Fails if it does not exist, so it doubles as an existence check.
-az webapp show --resource-group "$RG" --name "$APP" --output table
-
-# The three fields that answer "is it supposed to be up, and is it".
-# state is what you asked for; availabilityState is what Azure observes.
-az webapp show --resource-group "$RG" --name "$APP" \
-  --query "{state:state, availability:availabilityState, https:httpsOnly}" \
-  --output table
-
-az webapp config hostname list --webapp-name "$APP" \
-  --resource-group "$RG" --output table
-```
-
-#### The plan behind the app
-
-The plan owns the SKU, the instance count and the cost. An app that is slow or
-throttled is often a plan problem, not an app problem.
-
-```bash
-az appservice plan list --output table
-
-# SKU tier, size and current instance count for one plan.
-az appservice plan show --resource-group "$RG" --name "$PLAN" \
-  --query "{sku:sku.name, tier:sku.tier, workers:sku.capacity, apps:numberOfSites}" \
-  --output table
-
-# Which apps share this plan -- they share its CPU and memory too.
-az webapp list --resource-group "$RG" \
-  --query "[?contains(appServicePlanId, '/$PLAN')].{name:name, state:state}" \
-  --output table
 ```
 
 #### Container and configuration
@@ -154,32 +127,32 @@ az webapp list --resource-group "$RG" \
 ```bash
 # Which image the app is actually running. This is the first thing to check
 # when a deploy "worked" but the behaviour did not change.
-az webapp config container show --resource-group "$RG" --name "$APP" \
+az webapp config container show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --output table
 
 # Site configuration: linuxFxVersion holds the image reference, healthCheckPath
 # the probe, alwaysOn whether the app is allowed to idle out.
-az webapp config show --resource-group "$RG" --name "$APP" \
+az webapp config show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --query "{image:linuxFxVersion, health:healthCheckPath, alwaysOn:alwaysOn, acrIdentity:acrUseManagedIdentityCreds}" \
   --output table
 
 # Application settings -- the environment variables the container receives.
 # Values are shown, so do not paste this output anywhere public.
-az webapp config appsettings list --resource-group "$RG" --name "$APP" \
+az webapp config appsettings list --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --output table
 
 # Confirm the port setting specifically. An app that returns 502 on every
 # request while the container logs look healthy is almost always this.
-az webapp config appsettings list --resource-group "$RG" --name "$APP" \
+az webapp config appsettings list --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --query "[?name=='WEBSITES_PORT'].value" --output tsv
 
 # Held separately from app settings, so the listing above does not show them.
-az webapp config connection-string list --resource-group "$RG" --name "$APP" \
+az webapp config connection-string list --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --output table
 
 # The managed identity, and its principal id -- the object the AcrPull role
 # assignment is granted to.
-az webapp identity show --resource-group "$RG" --name "$APP" --output table
+az webapp identity show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output table
 ```
 
 #### Troubleshoot
@@ -187,39 +160,39 @@ az webapp identity show --resource-group "$RG" --name "$APP" --output table
 ```bash
 # Turn container logging on. Off by default, and "log tail" prints nothing
 # useful until it is enabled.
-az webapp log config --resource-group "$RG" --name "$APP" \
+az webapp log config --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --docker-container-logging filesystem --level information
 
 # Stream stdout from the running container. This is where Spring Boot's
 # startup banner, the "Started App in Xs" line and any stack trace appear.
-az webapp log tail --resource-group "$RG" --name "$APP"
+az webapp log tail --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 
 # Download the full log set as a zip when the failure has already happened
 # and streaming is too late.
-az webapp log download --resource-group "$RG" --name "$APP" \
+az webapp log download --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --log-file webapp-logs.zip
 
 # Deployment history, newest first.
-az webapp log deployment list --resource-group "$RG" --name "$APP" \
+az webapp log deployment list --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --output table
-az webapp log deployment show --resource-group "$RG" --name "$APP"
+az webapp log deployment show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 
 # A shell inside the running container. Confirms what the JVM actually sees:
 # the environment, the working directory, the unpacked jar layout.
-az webapp ssh --resource-group "$RG" --name "$APP"
+az webapp ssh --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 
 # Restart the app. Recycles the container without changing any configuration.
-az webapp restart --resource-group "$RG" --name "$APP"
+az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 
 # Stop and start. Stopping does not save money: the plan bills for its
 # instances whether or not an app is running on them.
-az webapp stop  --resource-group "$RG" --name "$APP"
-az webapp start --resource-group "$RG" --name "$APP"
+az webapp stop  --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
+az webapp start --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 
 # Hit the health endpoint through the public hostname, end to end.
 curl -sS "https://$APP_HOST/actuator/health"
 
-az webapp browse --resource-group "$RG" --name "$APP"
+az webapp browse --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 ```
 
 #### Metrics and deeper detail
@@ -238,15 +211,15 @@ az monitor metrics list --resource "$RESOURCE_ID" \
 
 # Deployment slots, if any. The production slot is not listed here; it is
 # the app itself.
-az webapp deployment slot list --resource-group "$RG" --name "$APP" \
+az webapp deployment slot list --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
   --output table
 
 # How traffic is split across slots, for a staged rollout.
-az webapp traffic-routing show --resource-group "$RG" --name "$APP"
+az webapp traffic-routing show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 
 # Everything, unfiltered. Useful when you do not yet know which field holds
 # the answer -- pipe it to a pager or into jq.
-az webapp show --resource-group "$RG" --name "$APP" --output json
+az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output json
 ```
 
 One detail is easy to get wrong. `az webapp log tail` streams the **platform
