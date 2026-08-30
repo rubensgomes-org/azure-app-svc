@@ -158,9 +158,10 @@ The tooling's own *resolvable configurations* — `jacocoAgent`, `jacocoAnt` and
 friends — are deliberately left out of `app/gradle.lockfile`. None reaches the
 compiled output, and each would rewrite that file on every routine tooling bump.
 This is separate from the plugin **classpath**, which is locked in
-`app/buildscript-gradle.lockfile`: the JARs implementing Spotless, SonarQube and
-the release plugin execute inside the build, so their transitive closure is
-worth pinning even though the coverage tooling's runtime graph is not.
+`app/buildscript-gradle.lockfile`: the JARs implementing Spotless, SonarQube,
+SpotBugs and the release plugin execute inside the build, so their transitive
+closure is worth pinning even though the coverage tooling's runtime graph is
+not.
 
 > **Note** — a lock file is a *forcing constraint*, not a checksum that
 > resolution is merely compared against. Where the lock and the Spring Boot BOM
@@ -762,6 +763,45 @@ release triggering roughly two extra `build-verify` runs, one per pushed commit.
 
 ## Static analysis
 
+Two independent analyzers. SpotBugs runs locally and in CI on every build;
+SonarCloud is opt-in and runs only where a caller asks for it. Neither feeds
+the other -- `sonar.java.spotbugs.reportPaths` is deliberately not set, so
+SonarCloud applies its own rules and SpotBugs findings are not duplicated into
+it as imported issues.
+
+### SpotBugs
+
+```bash
+./gradlew :app:spotbugsMain
+```
+
+Bytecode analysis for likely defects, via the `com.github.spotbugs` plugin.
+Applying that plugin attaches `spotbugsMain` and `spotbugsTest` to the `check`
+lifecycle task **by itself** -- there is no `dependsOn` in the build script and
+none should be added. Three consequences worth knowing:
+
+- `./gradlew check` runs SpotBugs, so CI gates on it inside the existing
+  `check` step. The shared `gradle-build-verify.yml` has no SpotBugs step.
+- `tasks.bootJar` and `tasks.sonar` both `dependsOn("check")`, so a finding
+  fails packaging and the release flow too, not only verification.
+- `spotbugsTest` is disabled: test sources are formatted and coverage-verified
+  but not bug-analyzed, because SpotBugs reports on idioms that are ordinary in
+  fixtures and assertions.
+
+`effort` and `reportLevel` are left at the plugin defaults. Reports land in:
+
+| Report | Path |
+|--------|------|
+| HTML (for humans) | `app/build/reports/spotbugs/main.html` |
+| XML (machine-readable) | `app/build/reports/spotbugs/main.xml` |
+
+> **Note** — requesting both formats makes SpotBugs write `total_classes="0"`
+> into the XML summary: the run statistics go to the first reporter only. Bug
+> instances are unaffected and appear in both reports. An empty `main.xml`
+> therefore means a clean analysis, not a skipped one.
+
+### SonarCloud
+
 ```bash
 export SONAR_TOKEN=<token>
 ./gradlew sonar
@@ -793,7 +833,7 @@ Cloning this project as a template means replacing `sonar.organization`,
 
 ## Continuous integration
 
-Four workflows, all `workflow_dispatch` only:
+Five workflows, all `workflow_dispatch` only:
 
 | Workflow               | Writes to the repo?                            | Writes elsewhere?             |
 |------------------------|------------------------------------------------|-------------------------------|
@@ -801,13 +841,14 @@ Four workflows, all `workflow_dispatch` only:
 | `release.yml`          | **Yes** — two commits and a tag                | No                            |
 | `acr-build-deploy.yml` | No                                             | An image, to Azure            |
 | `acr-repo-delete.yml`  | No                                             | **Deletes** an ACR repository |
+| `app-svc-delete.yml`   | No                                             | **Deletes** an App Service, then its ACR repository |
 
 `release.yml` is covered under [Releasing from CI](#releasing-from-ci). The rest
 of this section is about `build-verify.yml`.
 
 ### The workflows are shared, not local
 
-All four files in `.github/workflows/` are **stubs**. The body of each lives in
+Four of the five files in `.github/workflows/` are **stubs**. The body of each lives in
 [`rubensgomes-org/azure-workflows`](https://github.com/rubensgomes-org/azure-workflows)
 and is shared with every other `rubensgomes-org` Spring Boot repository, so a CI
 change lands once instead of ten times.
@@ -818,11 +859,17 @@ form), the `permissions`, and the `concurrency` group. **To change what a
 workflow does, change it in `azure-workflows`** — editing the stub here only
 changes how it is invoked.
 
+`app-svc-delete.yml` is the exception. `azure-workflows` has no App Service
+reusable workflow yet, so that file carries its `az webapp` steps inline; only
+its second job, the ACR teardown, delegates. If another repository needs the
+same teardown, promote the job into `azure-workflows` and reduce this file to a
+stub — the step contents move unchanged.
+
 | Shared component      | Does                                              | Used by                        |
 |-----------------------|---------------------------------------------------|--------------------------------|
 | `setup-java-gradle`   | `setup-java` (`microsoft` 25) + `setup-gradle`    | all three Gradle workflows     |
 | `gradle-build`        | `compile` → `test` → `check` → `assemble`         | build-verify, acr-build-deploy |
-| `azure-login`         | `az login` as a service principal                 | both ACR workflows             |
+| `azure-login`         | `az login` as a service principal                 | the ACR workflows, app-svc-delete |
 | `verify-acr-registry` | assert a registry exists, return its login server | both ACR workflows             |
 
 Three constraints explain the shape of all this:

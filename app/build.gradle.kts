@@ -85,6 +85,8 @@ plugins {
     alias(libs.plugins.release)
     // org.sonarqube: static analysis upload to SonarCloud
     alias(libs.plugins.sonarqube)
+    // com.github.spotbugs: JVM bytecode static analysis for likely defects
+    alias(libs.plugins.spotbugs)
     // com.diffplug.spotless: source formatting (Java, Kotlin, JSON, Gradle DSL)
     alias(libs.plugins.spotless)
     // org.springframework.boot: bootJar/bootRun and Spring Boot packaging
@@ -629,6 +631,55 @@ spotless {
         ktlint().setEditorConfigPath("$rootDir/.editorconfig")
         trimTrailingWhitespace()
         endWithNewline()
+    }
+}
+
+// *********************************************************************
+// ---------------------------------------------------------------------
+// --------------- >>> com.github.spotbugs Plugin <<< ------------------
+// ---------------------------------------------------------------------
+// https://spotbugs.readthedocs.io/en/latest/gradle.html
+
+// NOTE: applying this plugin generates one task per source set
+// ("spotbugsMain", "spotbugsTest") and adds BOTH to "check" on its own, so
+// no dependsOn is written here and none should be. That wiring is why the
+// shared "gradle-build-verify.yml" has no SpotBugs step of its own.
+//
+// The reach is wider than verification: "tasks.bootJar" and "tasks.sonar"
+// both dependOn("check") further down, so a finding also fails packaging
+// and the release flow. That is intended -- an unpackaged defect costs
+// less than a released one.
+//
+// "effort" and "reportLevel" are deliberately left at the plugin defaults.
+// This is the first time SpotBugs has analyzed this codebase; raise them
+// once the finding baseline is known, not before.
+
+// Test sources are formatted and coverage-verified, but not bug-analyzed:
+// SpotBugs reports on idioms that are ordinary in fixtures and assertions.
+tasks.spotbugsTest { enabled = false }
+
+tasks.spotbugsMain {
+    reports {
+        // Both formats are declared explicitly. Creating any report here
+        // replaces the plugin's XML-only default, so omitting "xml" would
+        // silently drop the machine-readable report. Output locations are
+        // pinned rather than left to the convention because BUILD.md and
+        // the CI logs name these paths.
+        //
+        // KNOWN ARTIFACT: asking SpotBugs for two formats at once makes the
+        // XML summary report total_classes="0" -- the run statistics go to
+        // the first reporter only. Bug instances are NOT affected and are
+        // written to both reports. Verified against a class with planted
+        // defects: they appear in the XML while total_classes still reads 0.
+        // So an empty main.xml means a clean build, not a skipped analysis.
+        create("html") {
+            required.set(true)
+            outputLocation.set(layout.buildDirectory.file("reports/spotbugs/main.html"))
+        }
+        create("xml") {
+            required.set(true)
+            outputLocation.set(layout.buildDirectory.file("reports/spotbugs/main.xml"))
+        }
     }
 }
 
