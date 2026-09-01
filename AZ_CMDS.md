@@ -104,7 +104,11 @@ Three details are easy to get wrong:
 ```bash
 # change the following accordingly:
 export REGISTRY='rubensdevacr'
-export RESOURCE_GROUP='rg-dev-app'
+# TF_VAR_rg_suffix is a GitHub organization variable, so a local shell does not
+# have it. Export it here (an azure-iac checkout already exports it for
+# Terraform) -- the group name cannot be composed without it.
+: "${TF_VAR_rg_suffix:?set TF_VAR_rg_suffix to the organization resource-group suffix}"
+export RESOURCE_GROUP="rg-dev-app-${TF_VAR_rg_suffix}"
 export REPOSITORY='dev/azure-app-svc'
 export APP_NAME='azure-app-svc'
 export TAG='0.0.1-SNAPSHOT'
@@ -161,7 +165,11 @@ throttled is often a plan problem, not an app problem.
 ```bash
 # change the following accordingly:
 export REGISTRY='rubensdevacr'
-export RESOURCE_GROUP='rg-dev-app'
+# TF_VAR_rg_suffix is a GitHub organization variable, so a local shell does not
+# have it. Export it here (an azure-iac checkout already exports it for
+# Terraform) -- the group name cannot be composed without it.
+: "${TF_VAR_rg_suffix:?set TF_VAR_rg_suffix to the organization resource-group suffix}"
+export RESOURCE_GROUP="rg-dev-app-${TF_VAR_rg_suffix}"
 export REPOSITORY='dev/azure-app-svc'
 export APP_NAME='azure-app-svc'
 export PLAN=<TODO: provisioned in Azure Portal>

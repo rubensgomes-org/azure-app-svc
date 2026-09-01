@@ -46,7 +46,7 @@ belongs on AKS or Container Apps instead.
 ### App Service Settings
 
 - Subscription: rubens-pay-as-go-subscription
-- Resource Group: rg-dev-app
+- Resource Group: `rg-dev-app-${TF_VAR_rg_suffix}`
 - Instance Name: azure-app-svc
 - Region: Central US
 - Registry: rubensdevacr
@@ -59,6 +59,12 @@ belongs on AKS or Container Apps instead.
 - Enable virtual networking integration: Off
 - Tag: ai-200-training=azure-app-svc
 - Image:Tag rubensdevacr.azurecr.io/dev/azure-app-svc:0.0.1-SNAPSHOT
+
+The resource group name is composed, never typed literally. `rg-dev-app` is the
+base; `TF_VAR_rg_suffix` is an organization-wide variable shared by every
+repository in the GitHub organization, and it is appended after a hyphen. With
+a suffix of `rsg` the real group is `rg-dev-app-rsg`. `azure-iac` creates the
+group and owns the naming; nothing here provisions one.
 
 The web app, and its plan are created manually from within the Azure Portal 
 App Services - > crete, not by this repository. This repository only builds and 
@@ -79,7 +85,7 @@ publishes the image the app runs.
 
 #### Resources
 
-- resource group: `rg-dev-app`
+- resource group: `rg-dev-app-${TF_VAR_rg_suffix}`
 - App Service Plan: <TODO: Azure Portal manual provisioning> (Linux)
 - web app name: `azure-app-svc`
 - default hostname: <TODO: to be resolved after app service is provisioned>
@@ -110,7 +116,11 @@ the web app is selected. They all take the same names and identifiers, so
 export them once and every later example stays short:
 
 ```bash
-export RESOURCE_GROUP='rg-dev-app'
+# TF_VAR_rg_suffix is a GitHub organization variable, so a local shell does not
+# have it. Export it here (an azure-iac checkout already exports it for
+# Terraform) -- the group name cannot be composed without it.
+: "${TF_VAR_rg_suffix:?set TF_VAR_rg_suffix to the organization resource-group suffix}"
+export RESOURCE_GROUP="rg-dev-app-${TF_VAR_rg_suffix}"
 export APP_NAME='azure-app-svc'
 
 # Read these back from Azure rather than assembling them by hand.

@@ -26,6 +26,12 @@
 # The App Service, its plan and its resource group are created by azure-iac.
 # This workflow deletes the app only; the plan and the group stay.
 #
+# The resource group name is COMPOSED, not typed: the resource_group_base input
+# plus the organization variable TF_VAR_rg_suffix, joined by a hyphen. The
+# suffix cannot live in the input default -- GitHub resolves the "on:" block
+# before the vars context exists, so an expression there would be dispatched as
+# its own literal text. Hence a base input and a job-level env.
+#
 # @author Rubens Gomes
 # ---------------------------------------------------------------------------
 name: app-svc-delete
@@ -33,8 +39,12 @@ name: app-svc-delete
 on:
   workflow_dispatch:
     inputs:
-      resource_group:
-        description: 'Resource group holding the App Service to delete.'
+      resource_group_base:
+        description: >
+          BASE name of the resource group holding the App Service, WITHOUT the
+          organization suffix. The group actually targeted is this value, a
+          hyphen, and the organization variable TF_VAR_rg_suffix. Check the
+          resolved name in the first step before confirming.
         required: false
         default: rg-dev-app
         type: string
@@ -77,7 +87,10 @@ jobs:
     timeout-minutes: 15
 
     env:
-      RESOURCE_GROUP: ${{ inputs.resource_group }}
+      RESOURCE_GROUP: ${{ inputs.resource_group_base }}-${{ vars.TF_VAR_rg_suffix }}
+      # Carried separately so the resolve step can tell an unset organization
+      # variable from a group that genuinely does not exist.
+      RG_SUFFIX: ${{ vars.TF_VAR_rg_suffix }}
       APP_NAME: ${{ inputs.app_name }}
       ENVIRONMENT: ${{ inputs.environment }}
       ALLOWED_ACTOR: rubensgomes
@@ -87,14 +100,14 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v7
 
-      - name: Resolve the repository coordinates
+      - name: Resolve the deployment coordinates
         id: repo
         shell: bash
         env:
           ARTIFACT_PROPERTIES_PATH: app/gradle.properties
         run: |
           echo "=============================================================="
-          echo " STEP: Resolve the repository coordinates"
+          echo " STEP: Resolve the deployment coordinates"
           echo "=============================================================="
           set -euo pipefail
           artifact_id="$(sed -n 's/^artifactId=//p' "$ARTIFACT_PROPERTIES_PATH")"
@@ -106,8 +119,21 @@ jobs:
             echo "The environment input resolved to empty." >&2
             exit 1
           fi
+          # An unset organization variable expands to empty and would leave a
+          # trailing hyphen, which Azure reports as a group that does not
+          # exist -- the same message a genuinely wrong group gives. Fail here
+          # instead, while the cause is still nameable.
+          if [ -z "${RG_SUFFIX:-}" ]; then
+            echo "The organization variable TF_VAR_rg_suffix resolved to empty." >&2
+            echo "The resource group name cannot be composed without it." >&2
+            echo "Set it on the rubensgomes-org organization, or on this" >&2
+            echo "repository, as an Actions VARIABLE (not a secret)." >&2
+            echo "Nothing was deleted and Azure was never contacted." >&2
+            exit 1
+          fi
           echo "repository=${ENVIRONMENT}/${artifact_id}" >> "$GITHUB_OUTPUT"
-          echo "Target repository: ${ENVIRONMENT}/${artifact_id}"
+          echo "Target repository:      ${ENVIRONMENT}/${artifact_id}"
+          echo "Target resource group:  ${RESOURCE_GROUP}"
 
       # MUST stay ahead of the sign-in step, so a denial can truthfully report
       # that Azure was never contacted.
