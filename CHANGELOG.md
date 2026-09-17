@@ -35,6 +35,9 @@ and one that still holds only the empty `### Added` / `### Changed` /
 - `acr-repo-delete.yml` now passes `artifact-id: azure-app-svc` to the
   reusable `acr-repo-delete` workflow, which requires it as an input instead
   of reading `app/gradle.properties`.
+- `acr-repo-delete.yml`: the reusable `acr-repo-delete` workflow dropped its
+  `confirm` input, so it is no longer passed in `with:`. The local `confirm`
+  checkbox now gates the `delete` job directly via `if: ${{ inputs.confirm }}`.
 
 ### Fixed
 
