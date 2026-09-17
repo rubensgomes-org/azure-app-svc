@@ -1,0 +1,238 @@
+# =============================================================================
+# app-svc-delete
+#
+# DESTRUCTIVE. Deletes the App Service (web app) and nothing else. Its plan,
+# its resource group and the ACR repository whose image it was running are all
+# left alone -- use acr-repo-delete.yml to tear down the image repository.
+# An App Service has no soft-delete and no recycle bin.
+#
+# This project's source code and documentation were generated with the
+# assistance of Artificial Intelligence (AI). For more information, please
+# refer to the `AI_DISCLAIMER.md` document located in the project's root
+# directory.
+# =============================================================================
+name: app-svc-delete
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'Name of the App Service (web app) to delete. Its plan and resource group are left alone.'
+        required: false
+        default: azure-app-svc
+        type: string
+      environment:
+        description: >
+          Environment token of the resource group name. With TF_VAR_WORKLOAD it
+          forms rg-<workload>app-<environment>. Check the resolved group name in
+          the first step before confirming.
+        required: true
+        type: choice
+        options:
+          - dev
+          - lab
+      confirm:
+        description: >
+          THE APP SERVICE IS DELETED PERMANENTLY. There is no soft-delete and
+          no recycle bin. Its ACR repository is NOT touched.
+          SAFEGUARD: type EXACTLY "DELETE APP <environment>/<app_name>" --
+          e.g. DELETE APP lab/azure-app-svc
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-svc-delete
+  cancel-in-progress: false
+
+jobs:
+  delete-app-service:
+    name: delete-app-service
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      RESOURCE_GROUP: rg-${{ vars.TF_VAR_WORKLOAD }}app-${{ inputs.environment }}
+      WORKLOAD: ${{ vars.TF_VAR_WORKLOAD }}
+      APP_NAME: ${{ inputs.app_name }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      ALLOWED_ACTOR: 'rubensgomes,rubens-gomes_3CC'
+
+    steps:
+      # No checkout: every step works from inputs and repository variables,
+      # and the actions it uses are remote.
+      - name: Resolve the deployment coordinates
+        id: target
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the deployment coordinates"
+          echo "=============================================================="
+          set -euo pipefail
+          if [ -z "${ENVIRONMENT:-}" ]; then
+            echo "The environment input resolved to empty." >&2
+            exit 1
+          fi
+          # An unset variable expands to empty and composes "rg-app-<env>" --
+          # a well-formed name for a group that does not exist, which Azure
+          # reports exactly as it reports a genuinely wrong one. Fail here
+          # instead, while the cause is still nameable.
+          if [ -z "${WORKLOAD:-}" ]; then
+            echo "The variable TF_VAR_WORKLOAD resolved to empty." >&2
+            echo "The resource group name cannot be composed without it." >&2
+            echo "Set it on this repository, or on the rubensgomes-org" >&2
+            echo "organization, as an Actions VARIABLE (not a secret)." >&2
+            echo "It MUST match the workload azure-iac provisioned" >&2
+            echo "the estate with -- see that repo's docs/NAMING.md." >&2
+            echo "Nothing was deleted and Azure was never contacted." >&2
+            exit 1
+          fi
+          if [ -z "${APP_NAME:-}" ]; then
+            echo "The app_name input resolved to empty." >&2
+            exit 1
+          fi
+          echo "target=${ENVIRONMENT}/${APP_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Target App Service:     ${APP_NAME}"
+          echo "Target resource group:  ${RESOURCE_GROUP}"
+
+      # MUST stay ahead of the sign-in step, so a denial can truthfully report
+      # that Azure was never contacted.
+      - name: SAFEGUARD - Validate actor and confirmation phrase
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          TARGET: ${{ steps.target.outputs.target }}
+          TYPED_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: SAFEGUARD - Validate actor and confirmation phrase"
+          echo "=============================================================="
+          set -euo pipefail
+          # Split on commas and spaces so the list can carry one login or
+          # several. Matching stays exact per login: a substring match would
+          # let "rubensgomes-bot" pass as "rubensgomes".
+          IFS=', ' read -r -a allowed_actors <<< "$ALLOWED_ACTOR"
+          permitted=0
+          for login in "${allowed_actors[@]}"; do
+            if [ "$ACTOR" = "$login" ]; then
+              permitted=1
+              break
+            fi
+          done
+          if [ "$permitted" -ne 1 ]; then
+            echo "Denied: only '${ALLOWED_ACTOR}' may run this workflow." >&2
+            echo "Actor: '${ACTOR}'." >&2
+            exit 1
+          fi
+          # Built from the RESOLVED target, so the phrase proves the caller
+          # knows what will actually be deleted.
+          expected_phrase="DELETE APP ${TARGET}"
+          if [ "$TYPED_CONFIRM" != "$expected_phrase" ]; then
+            echo "Denied: confirmation phrase did not match exactly." >&2
+            echo "Expected: ${expected_phrase}" >&2
+            echo "Got:      ${TYPED_CONFIRM}" >&2
+            echo "" >&2
+            echo "Nothing was deleted and Azure was never contacted." >&2
+            exit 1
+          fi
+          echo "Safeguard passed. This run will delete:"
+          echo "  App Service: ${APP_NAME} (resource group ${RESOURCE_GROUP})"
+          echo "Nothing else is touched -- not the plan, the resource group,"
+          echo "nor the ACR repository the app was running."
+
+      - name: Sign in to Azure
+        uses: rubensgomes-org/azure-workflows/.github/actions/azure-login@v0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Deliberately "az webapp list" and not "show": "show" cannot distinguish
+      # "absent" from "the subscription could not be reached", so a transient
+      # outage would look like a successful no-op and the run would go green
+      # having deleted nothing.
+      - name: Check whether the App Service exists
+        id: exists
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Check whether the App Service exists"
+          echo " az webapp list --resource-group ${RESOURCE_GROUP}"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! webapps="$(az webapp list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list the App Services in '${RESOURCE_GROUP}'." >&2
+            echo "That is a subscription- or resource-group-level failure -- a" >&2
+            echo "network or token problem, a principal without read access, or" >&2
+            echo "a group that does not exist -- and NOT a missing app." >&2
+            echo "Nothing was deleted." >&2
+            exit 1
+          fi
+          # -F -x: whole line, literal. A substring match would let
+          # "azure-app-svc" be satisfied by "azure-app-svc-legacy".
+          if ! printf '%s\n' "$webapps" | grep -Fxq "$APP_NAME"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "App Service '${APP_NAME}' is not in '${RESOURCE_GROUP}'."
+            echo "Nothing to delete; the delete step will be skipped."
+            exit 0
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "App Service '${APP_NAME}' exists and will be PERMANENTLY deleted."
+
+      - name: Delete the App Service
+        if: steps.exists.outputs.exists == 'true'
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Delete the App Service"
+          echo " az webapp delete --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          az webapp delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${APP_NAME}"
+
+      # Reads the state back: a delete that reported success but left the app
+      # behind must fail the run, not pass it.
+      - name: Verify the App Service no longer exists
+        shell: bash
+        env:
+          EXISTED: ${{ steps.exists.outputs.exists }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Verify the App Service no longer exists"
+          echo " az webapp show --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          if show_output="$(az webapp show --resource-group "${RESOURCE_GROUP}" --name "${APP_NAME}" 2>&1)"; then
+            printf '%s\n' "$show_output"
+            echo "" >&2
+            echo "App Service '${APP_NAME}' is STILL in '${RESOURCE_GROUP}'." >&2
+            echo "The delete step reported success, so it did not take effect." >&2
+            exit 1
+          fi
+          echo "'az webapp show' failed, which is what a deleted app looks like:"
+          # sed, not ${var//}, because this indents EVERY line.
+          # shellcheck disable=SC2001
+          printf '%s\n' "$show_output" | sed 's/^/  /'
+          echo ""
+          # A non-zero "show" is ALSO what an expired token or a network failure
+          # looks like, so absence is only believed once the group lists cleanly.
+          if ! webapps="$(az webapp list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "But '${RESOURCE_GROUP}' could not be listed either, so the" >&2
+            echo "failure above is not proof of absence. Re-run to verify." >&2
+            exit 1
+          fi
+          if printf '%s\n' "$webapps" | grep -Fxq "$APP_NAME"; then
+            echo "'${APP_NAME}' is absent from 'show' but present in 'list'." >&2
+            echo "The deletion is not complete. Re-run to verify." >&2
+            exit 1
+          fi
+          if [ "$EXISTED" = "true" ]; then
+            echo "Deleted. '${APP_NAME}' is gone from '${RESOURCE_GROUP}'."
+          else
+            echo "Nothing was deleted. '${APP_NAME}' was already absent from '${RESOURCE_GROUP}'."
+          fi

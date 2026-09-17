@@ -1,0 +1,18 @@
+############################ dev #############################################
+## "dev" profile  (Azure Cloud profile)
+## Ensure you have Settings / Environment varibles:
+##   SPRING_PROFILES_ACTIVE: dev
+
+## --------------- >>> logging <<< --------------------------------------------
+logging:
+  level:
+    root: "info"
+
+## --------------- >>> springdoc <<< ------------------------------------------
+##   Swagger UI  http://<azure-app-svc-url>/swagger-ui.html
+##   OpenAPI     http://<azure-app-svc-url>/v3/api-docs
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

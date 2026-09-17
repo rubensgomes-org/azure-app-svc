@@ -1,0 +1,32 @@
+############################ docker ############################################
+## "docker" profile
+
+## --------------- >>> logging <<< --------------------------------------------
+logging:
+  level:
+    root: "info"
+
+spring:
+  ## stdout is a pipe read by the Docker log driver, never a terminal
+  output:
+    ansi:
+      enabled: "never"
+
+## --------------- >>> management <<< -----------------------------------------
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: "never"
+  endpoints:
+    web:
+      exposure:
+        include: "health"
+
+## --------------- >>> springdoc <<< ------------------------------------------
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

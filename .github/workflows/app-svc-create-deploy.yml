@@ -1,0 +1,614 @@
+# =============================================================================
+# app-svc-create-deploy
+#
+# Creates the App Service if it is absent, and otherwise redeploys the existing
+# one onto the last image pushed to ACR. The counterpart to app-svc-delete.yml.
+#
+# This project's source code and documentation were generated with the
+# assistance of Artificial Intelligence (AI). For more information, please
+# refer to the `AI_DISCLAIMER.md` document located in the project's root
+# directory.
+# =============================================================================
+name: app-svc-create-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'Name of the App Service (web app) to create or deploy to.'
+        required: false
+        default: appsvc
+        type: string
+      environment:
+        description: >
+          Image namespace AND the environment token of the resource group name.
+          With artifactId this forms the repository <environment>/<artifactId>;
+          with TF_VAR_WORKLOAD it forms rg-<workload>app-<environment>. Check
+          the resolved group name in the first step.
+        required: true
+        type: choice
+        options:
+          - dev
+          - lab
+      plan_name:
+        description: >
+          Name of the EXISTING Linux App Service Plan. It is resolved to a
+          resource id across the whole subscription, so it does not need to be
+          in the app's resource group -- and it is not. The plan also decides
+          the app's region.
+        required: false
+        default: asp-biceplab-dev-centralus
+        type: string
+      identity_name:
+        description: >
+          Name of the EXISTING user-assigned managed identity used to pull from
+          ACR. It must hold AcrPull on the registry.
+        required: false
+        default: id-rgomesapp-lab
+        type: string
+      registry_name:
+        description: 'Name of the EXISTING Azure Container Registry to pull from (not the login server).'
+        required: true
+        type: choice
+        options:
+          - crrgomesdev01
+          - crrgomeslab02
+      image_tag:
+        description: 'Image tag to deploy. Empty resolves the last tag pushed to the ACR repository.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel in flight: a run interrupted between the create and the
+  # configuration steps leaves an App Service that exists but cannot serve.
+  group: app-svc-create-deploy
+  cancel-in-progress: false
+
+jobs:
+  create-deploy-app-service:
+    name: create-deploy-app-service
+    runs-on: ubuntu-latest
+    # Higher than the delete workflow's 15: a cold image pull followed by the
+    # health poll can legitimately outlast it.
+    timeout-minutes: 30
+
+    env:
+      RESOURCE_GROUP: rg-${{ vars.TF_VAR_WORKLOAD }}app-${{ inputs.environment }}
+      WORKLOAD: ${{ vars.TF_VAR_WORKLOAD }}
+      APP_NAME: ${{ inputs.app_name }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      PLAN_NAME: ${{ inputs.plan_name }}
+      IDENTITY_NAME: ${{ inputs.identity_name }}
+      REGISTRY_NAME: ${{ inputs.registry_name }}
+      REQUESTED_TAG: ${{ inputs.image_tag }}
+      PROFILES_ACTIVE: ${{ inputs.environment }}
+      # Requires a Basic or higher App Service plan to be enforced.
+      HEALTH_CHECK_PATH: /actuator/health
+      # "--tags":
+      OWNER_TAG: owner=${{ vars.TF_VAR_OWNER }}
+      ENV_TAG: env=${{ inputs.environment }}
+      # The Dockerfile publishes EXPOSE 8080, but App Service forwards to 80
+      # unless told otherwise.
+      WEBSITES_PORT_VALUE: '8080'
+      HEALTH_PROBE_TIMEOUT_SECONDS: '240'
+      HEALTH_PROBE_INTERVAL_SECONDS: '10'
+      HEALTH_PROBE_REQUEST_TIMEOUT_SECONDS: '10'
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Ahead of the sign-in step, so a rejection can truthfully report that
+      # Azure was never contacted.
+      - name: Resolve the deployment coordinates
+        id: coords
+        shell: bash
+        env:
+          ARTIFACT_PROPERTIES_PATH: app/gradle.properties
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the deployment coordinates"
+          echo "=============================================================="
+          set -euo pipefail
+          artifact_id="$(sed -n 's/^artifactId=//p' "$ARTIFACT_PROPERTIES_PATH")"
+          if [ -z "$artifact_id" ]; then
+            echo "artifactId not found in ${ARTIFACT_PROPERTIES_PATH}" >&2
+            exit 1
+          fi
+          # A dispatch field the operator cleared arrives as "", not as the
+          # declared default. Every JMESPath filter below would then read
+          # [?name==''], match nothing, and be reported as "not found" rather
+          # than as "not supplied".
+          for coordinate in ENVIRONMENT APP_NAME PLAN_NAME IDENTITY_NAME REGISTRY_NAME; do
+            if [ -z "${!coordinate:-}" ]; then
+              echo "The ${coordinate} input resolved to empty." >&2
+              echo "A dispatch field that was cleared arrives empty rather" >&2
+              echo "than falling back to its declared default." >&2
+              echo "Nothing was created and Azure was never contacted." >&2
+              exit 1
+            fi
+          done
+          # An unset variable expands to empty and composes "rg-app-<env>" --
+          # a well-formed name for a group that does not exist, which Azure
+          # reports exactly as it reports a genuinely wrong one. Fail here
+          # instead, while the cause is still nameable.
+          if [ -z "${WORKLOAD:-}" ]; then
+            echo "The variable TF_VAR_WORKLOAD resolved to empty." >&2
+            echo "The resource group name cannot be composed without it." >&2
+            echo "Set it on this repository, or on the rubensgomes-org" >&2
+            echo "organization, as an Actions VARIABLE (not a secret)." >&2
+            echo "It MUST match the workload azure-iac provisioned" >&2
+            echo "the estate with -- see that repo's docs/NAMING.md." >&2
+            echo "Nothing was created and Azure was never contacted." >&2
+            exit 1
+          fi
+          echo "repository=${ENVIRONMENT}/${artifact_id}" >> "$GITHUB_OUTPUT"
+          echo "Target repository:      ${ENVIRONMENT}/${artifact_id}"
+          echo "Target resource group:  ${RESOURCE_GROUP}"
+          echo "Target App Service:     ${APP_NAME}"
+          echo "App Service Plan:       ${PLAN_NAME}"
+          echo "Managed identity:       ${IDENTITY_NAME}"
+
+      - name: Sign in to Azure
+        uses: rubensgomes-org/azure-workflows/.github/actions/azure-login@v0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify the ACR registry
+        id: registry
+        uses: rubensgomes-org/azure-workflows/.github/actions/verify-acr-registry@v0
+        with:
+          registry-name: ${{ inputs.registry_name }}
+
+      # managed identity resource id is required by the "az webapp create"
+      - name: Resolve the managed identity resource id
+        id: identity
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the managed identity resource id"
+          echo " az identity list  (filtered on name ${IDENTITY_NAME})"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! matches="$(az identity list \
+              --query "[?name=='${IDENTITY_NAME}'].id" \
+              --output tsv)"; then
+            echo "Could not list the managed identities in this subscription." >&2
+            echo "That is a subscription-level failure -- a network or token" >&2
+            echo "problem, or a principal without read access -- and NOT a" >&2
+            echo "missing identity. Nothing was created." >&2
+            exit 1
+          fi
+          match_count="$(printf '%s\n' "$matches" | grep -c '[^[:space:]]' || true)"
+          if [ "$match_count" -eq 0 ]; then
+            echo "No managed identity named '${IDENTITY_NAME}' is visible." >&2
+            echo "It is provisioned by azure-iac into the platform" >&2
+            echo "resource group, not by this repository. Nothing was created." >&2
+            exit 1
+          fi
+          if [ "$match_count" -gt 1 ]; then
+            echo "'${IDENTITY_NAME}' names ${match_count} identities:" >&2
+            printf '%s\n' "$matches" | sed 's/^/  /' >&2
+            echo "Refusing to guess which one should pull the image." >&2
+            exit 1
+          fi
+          echo "id=${matches}" >> "$GITHUB_OUTPUT"
+          echo "Identity resource id: ${matches}"
+
+      - name: Resolve the image tag to deploy
+        id: image
+        shell: bash
+        env:
+          REPOSITORY: ${{ steps.coords.outputs.repository }}
+          LOGIN_SERVER: ${{ steps.registry.outputs.login-server }}
+          # "--orderby" only means anything alongside "--top"; without it the
+          # ordering of the returned page is unspecified.
+          ACR_TAG_QUERY_TOP: '1'
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the image tag to deploy"
+          echo " az acr repository show-tags --name ${REGISTRY_NAME} --repository ${REPOSITORY}"
+          echo "=============================================================="
+          set -euo pipefail
+          # A non-zero exit means the REPOSITORY is absent; a zero exit with no
+          # output means it exists and holds no tags. Both are fatal, but they
+          # have different causes and different fixes.
+          if ! tags="$(az acr repository show-tags \
+              --name "$REGISTRY_NAME" \
+              --repository "$REPOSITORY" \
+              --output tsv)"; then
+            echo "Repository '${REPOSITORY}' is not in registry '${REGISTRY_NAME}'." >&2
+            echo "Run the acr-build-deploy workflow to push an image first," >&2
+            echo "or correct the environment or registry_name input." >&2
+            echo "Nothing was created." >&2
+            exit 1
+          fi
+          if [ -z "$(printf '%s' "$tags" | tr -d '[:space:]')" ]; then
+            echo "Repository '${REPOSITORY}' exists but holds no tags." >&2
+            echo "Run the acr-build-deploy workflow to push an image first." >&2
+            echo "Nothing was created." >&2
+            exit 1
+          fi
+          if [ -n "${REQUESTED_TAG:-}" ]; then
+            # -F -x: whole line, literal. A substring match would let "0.0.3"
+            # be satisfied by "0.0.30".
+            if ! printf '%s\n' "$tags" | grep -Fxq "$REQUESTED_TAG"; then
+              echo "Tag '${REQUESTED_TAG}' is not in '${REPOSITORY}'." >&2
+              echo "Available tags:" >&2
+              printf '%s\n' "$tags" | sed 's/^/  /' >&2
+              exit 1
+            fi
+            tag="$REQUESTED_TAG"
+            echo "Using the pinned tag '${tag}'."
+          else
+            if ! tag="$(az acr repository show-tags \
+                --name "$REGISTRY_NAME" \
+                --repository "$REPOSITORY" \
+                --orderby time_desc \
+                --top "$ACR_TAG_QUERY_TOP" \
+                --output tsv)"; then
+              echo "Could not read the most recently pushed tag." >&2
+              exit 1
+            fi
+            echo "Using the last tag pushed to '${REPOSITORY}': '${tag}'."
+          fi
+          # Guards against composing a reference that ends in ":", which is a
+          # valid-looking string that pulls nothing.
+          if [ -z "$tag" ]; then
+            echo "The resolved image tag is empty." >&2
+            exit 1
+          fi
+          reference="${LOGIN_SERVER}/${REPOSITORY}:${tag}"
+          {
+            echo "tag=${tag}"
+            echo "reference=${reference}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Image reference: ${reference}"
+
+      # Deliberately "az webapp list" and not "show": "show" cannot distinguish
+      # "absent" from "the subscription could not be reached", so a transient
+      # outage would look like a missing app and this run would create a second
+      # one -- or fail against a name that is already taken.
+      - name: Check whether the App Service exists
+        id: exists
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Check whether the App Service exists"
+          echo " az webapp list --resource-group ${RESOURCE_GROUP}"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! webapps="$(az webapp list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list the App Services in '${RESOURCE_GROUP}'." >&2
+            echo "That is a subscription- or resource-group-level failure -- a" >&2
+            echo "network or token problem, a principal without read access, or" >&2
+            echo "a group that does not exist -- and NOT a missing app." >&2
+            echo "Nothing was created." >&2
+            exit 1
+          fi
+          # -F -x: whole line, literal. A substring match would let "appsvc"
+          # be satisfied by "appsvc-legacy".
+          if printf '%s\n' "$webapps" | grep -Fxq "$APP_NAME"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "App Service '${APP_NAME}' exists in '${RESOURCE_GROUP}'."
+            echo "This run will deploy the image to it. Its plan, identity,"
+            echo "tags and application settings are left untouched."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "App Service '${APP_NAME}' is not in '${RESOURCE_GROUP}'."
+            echo "This run will create it."
+          fi
+
+      - name: Create the App Service
+        if: steps.exists.outputs.exists == 'false'
+        shell: bash
+        env:
+          IDENTITY_ID: ${{ steps.identity.outputs.id }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Create the App Service"
+          echo " az webapp create --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          # --plan takes the plan NAME: az looks it up in --resource-group,
+          # then falls back to a subscription-wide search, and raises on a name
+          # that is absent or ambiguous. --acr-identity and --assign-identity
+          # take the resolved resource id, because a bare identity name means
+          # "system assigned" rather than the one named.
+          #
+          # No --container-registry-user or --container-registry-password, ever.
+          # The pull is authenticated by the managed identity holding AcrPull.
+          #
+          # Each tag is its own quoted argument. Passing "$OWNER_TAG $ENV_TAG"
+          # as one string creates a SINGLE tag whose key contains a space.
+          az webapp create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --plan "$PLAN_NAME" \
+            --container-image-name "$IMAGE_REFERENCE" \
+            --assign-identity "$IDENTITY_ID" \
+            --acr-use-identity \
+            --acr-identity "$IDENTITY_ID" \
+            --https-only true \
+            --tags "$OWNER_TAG" "$ENV_TAG" \
+            --output none
+          echo "Created '${APP_NAME}' on plan '${PLAN_NAME}'."
+
+      # The container's FIRST boot happens here without WEBSITES_PORT, so App
+      # Service forwards to port 80 and those first requests 502. That is
+      # expected and transient: this step recycles the container with the port
+      # known. Do not read the 502s in the log as the failure they resemble.
+      - name: Configure the new App Service
+        if: steps.exists.outputs.exists == 'false'
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Configure the new App Service"
+          echo " az webapp config appsettings set --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          # "--output none" is load-bearing, not cosmetic: this command echoes
+          # EVERY application setting with its value, and a run log is public
+          # to anyone who can read the repository.
+          az webapp config appsettings set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --settings \
+              "SPRING_PROFILES_ACTIVE=${PROFILES_ACTIVE}" \
+              "WEBSITES_PORT=${WEBSITES_PORT_VALUE}" \
+            --output none
+          echo "Set SPRING_PROFILES_ACTIVE=${PROFILES_ACTIVE} and WEBSITES_PORT=${WEBSITES_PORT_VALUE}."
+          # AFTER the port, never before. A probe armed while every request
+          # 502s for want of WEBSITES_PORT makes App Service replace instances
+          # it believes unhealthy, turning a benign first boot into a restart
+          # loop. "az webapp config set" has no --health-check-path flag; the
+          # site configuration key is set through --generic-configurations.
+          az webapp config set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --generic-configurations "healthCheckPath=${HEALTH_CHECK_PATH}" \
+            --output none
+          echo "Set the health check path to '${HEALTH_CHECK_PATH}'."
+
+      # The image and nothing else. The plan, identity, tags and application
+      # settings of an app that already exists are deliberately left alone --
+      # the verification step reports any drift it finds rather than silently
+      # correcting it. No --container-registry-* flag is passed, which is what
+      # leaves the managed-identity pull configuration intact.
+      - name: Deploy the image to the existing App Service
+        if: steps.exists.outputs.exists == 'true'
+        shell: bash
+        env:
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Deploy the image to the existing App Service"
+          echo " az webapp config container set --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          az webapp config container set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --container-image-name "$IMAGE_REFERENCE" \
+            --output none
+          echo "Pointed '${APP_NAME}' at ${IMAGE_REFERENCE}."
+
+      # Each configuration write above triggers its own recycle, and those can
+      # overlap, so the container left running is not deterministically the one
+      # that saw the final configuration. One explicit restart makes the
+      # readback below and the smoke test describe the same generation.
+      - name: Restart the App Service
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Restart the App Service"
+          echo " az webapp restart --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          az webapp restart \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$APP_NAME" \
+            --output none
+          echo "Restarted '${APP_NAME}'."
+
+      # Reads the state back: a write that reported success but did not take
+      # effect must fail the run, not pass it.
+      - name: Verify the App Service converged
+        id: verify
+        shell: bash
+        env:
+          CREATED: ${{ steps.exists.outputs.exists == 'false' }}
+          IDENTITY_ID: ${{ steps.identity.outputs.id }}
+          IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Verify the App Service converged"
+          echo " az webapp show --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+
+          failures=0
+          warnings=0
+
+          # Always a failure: these are the properties this run wrote on both
+          # paths.
+          record_failure() {
+            printf 'FAIL  %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2
+            failures=$((failures + 1))
+          }
+          # A failure only on the create path. On the deploy path this run
+          # deliberately did not write these, so a mismatch is drift to report,
+          # not a reason to fail a deployment that did what it was asked to.
+          record_drift() {
+            if [ "$CREATED" = "true" ]; then
+              record_failure "$@"
+              return
+            fi
+            printf 'WARN  %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2
+            warnings=$((warnings + 1))
+          }
+          normalize() {
+            printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+          }
+          none_to_empty() {
+            if [ "$1" = "None" ]; then printf ''; else printf '%s' "$1"; fi
+          }
+
+          # "list" rather than "show" for presence, for the same reason as the
+          # existence check: a failing "show" is also what an expired token
+          # looks like.
+          if ! webapps="$(az webapp list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list '${RESOURCE_GROUP}', so nothing here is" >&2
+            echo "proof of anything. Re-run to verify." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$webapps" | grep -Fxq "$APP_NAME"; then
+            echo "'${APP_NAME}' is absent from '${RESOURCE_GROUP}' after the run." >&2
+            exit 1
+          fi
+
+          # The doubled brackets are load-bearing. "--output tsv" renders a
+          # top-level LIST one element per LINE, and SORTS the keys of a dict
+          # -- so "[a,b,c]" cannot be read positionally and "{k:v}" comes back
+          # in alphabetical order. Wrapping makes the result a list of ONE row,
+          # which is emitted tab-separated in the order written here.
+          site="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+            --query "[[state, httpsOnly, appServicePlanId, location, defaultHostName, tags.owner]]" \
+            --output tsv)"
+          IFS=$'\t' read -r state https_only plan_id location host owner_tag <<< "$site"
+
+          config="$(az webapp config show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+            --query "[[linuxFxVersion, healthCheckPath, acrUseManagedIdentityCreds]]" \
+            --output tsv)"
+          IFS=$'\t' read -r linux_fx health_path acr_identity_creds <<< "$config"
+          # A property Azure has never been given renders as the string "None",
+          # not as an empty field, which would otherwise be reported verbatim
+          # as the "actual" value of an unset setting.
+          health_path="$(none_to_empty "$health_path")"
+          owner_tag="$(none_to_empty "$owner_tag")"
+
+          settings="$(az webapp config appsettings list --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+            --query "[?name=='WEBSITES_PORT' || name=='SPRING_PROFILES_ACTIVE'].[name,value]" \
+            --output tsv)"
+          websites_port="$(printf '%s\n' "$settings" | awk -F'\t' '$1 == "WEBSITES_PORT" { print $2 }')"
+          active_profiles="$(printf '%s\n' "$settings" | awk -F'\t' '$1 == "SPRING_PROFILES_ACTIVE" { print $2 }')"
+
+          assigned_identities="$(az webapp identity show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+            --query "keys(userAssignedIdentities || \`{}\`)" --output tsv)"
+
+          echo "Read back from Azure:"
+          echo "  state:              ${state}"
+          echo "  image:              ${linux_fx}"
+          echo "  host:               ${host}"
+          echo "  region:             ${location}"
+          echo "  httpsOnly:          ${https_only}"
+          echo "  healthCheckPath:    ${health_path}"
+          echo "  acrUseIdentityCreds:${acr_identity_creds}"
+          echo ""
+
+          # The single most important assertion: the write reported success,
+          # so anything else here means it did not take effect.
+          if [ "$linux_fx" != "DOCKER|${IMAGE_REFERENCE}" ]; then
+            record_failure "container image" "DOCKER|${IMAGE_REFERENCE}" "$linux_fx"
+          fi
+          if [ "$state" != "Running" ]; then
+            record_failure "app state" "Running" "$state"
+          fi
+
+          if [ "$https_only" != "True" ]; then
+            record_drift "httpsOnly" "True" "$https_only"
+          fi
+          if [ "$acr_identity_creds" != "True" ]; then
+            record_drift "acrUseManagedIdentityCreds" "True" "$acr_identity_creds"
+          fi
+          if [ "$websites_port" != "$WEBSITES_PORT_VALUE" ]; then
+            record_drift "WEBSITES_PORT" "$WEBSITES_PORT_VALUE" "${websites_port:-<unset>}"
+          fi
+          if [ "$active_profiles" != "$PROFILES_ACTIVE" ]; then
+            record_drift "SPRING_PROFILES_ACTIVE" "$PROFILES_ACTIVE" "${active_profiles:-<unset>}"
+          fi
+          if [ "$health_path" != "$HEALTH_CHECK_PATH" ]; then
+            record_drift "healthCheckPath" "$HEALTH_CHECK_PATH" "${health_path:-<unset>}"
+          fi
+          if [ "$owner_tag" != "rubens.s.gomes@gmail.com" ]; then
+            record_drift "owner tag" "rubens.s.gomes@gmail.com" "${owner_tag:-<unset>}"
+          fi
+          # The trailing segment of the plan resource id is its name, which
+          # is all this run knows the plan by. Compared normalized: Azure
+          # varies the casing of the "resourceGroups" segment of an id.
+          if [ "$(normalize "${plan_id##*/}")" != "$(normalize "$PLAN_NAME")" ]; then
+            record_drift "App Service Plan" "$PLAN_NAME" "${plan_id##*/}"
+          fi
+          if ! printf '%s\n' "$assigned_identities" \
+              | tr '[:upper:]' '[:lower:]' \
+              | grep -Fxq "$(normalize "$IDENTITY_ID")"; then
+            record_drift "assigned identity" "$IDENTITY_ID" "${assigned_identities:-<none>}"
+          fi
+
+          echo "host=${host}" >> "$GITHUB_OUTPUT"
+
+          if [ "$warnings" -gt 0 ]; then
+            echo "::warning::${warnings} setting(s) on the existing '${APP_NAME}' differ from what this workflow would have created. It deployed the image only and did not change them."
+          fi
+          # Reported in one pass rather than one per re-run: each attempt costs
+          # a full round trip to Azure, so a converge that broke three
+          # assertions should say all three the first time.
+          if [ "$failures" -gt 0 ]; then
+            echo "" >&2
+            echo "${failures} assertion(s) failed. The App Service is NOT in" >&2
+            echo "the requested state." >&2
+            exit 1
+          fi
+          if [ "$CREATED" = "true" ]; then
+            echo "Created and configured '${APP_NAME}'."
+          else
+            echo "Deployed ${IMAGE_REFERENCE} to the existing '${APP_NAME}'."
+          fi
+          echo "https://${host}"
+
+      # An app that never answers its health endpoint after a deploy is not
+      # deployed, whatever the configuration reads back as. This is also the
+      # only step that would catch an identity without AcrPull: the pull fails,
+      # the container never starts, and every property asserted above still
+      # reads correct.
+      - name: Smoke-test the health endpoint
+        shell: bash
+        env:
+          APP_HOST: ${{ steps.verify.outputs.host }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Smoke-test the health endpoint"
+          echo " curl https://${APP_HOST}${HEALTH_CHECK_PATH}"
+          echo "=============================================================="
+          set -euo pipefail
+          # "/actuator/health" is web-exposed by Spring Boot's defaults. The
+          # "/liveness" and "/readiness" children are NOT: those need
+          # management.endpoint.health.probes.enabled, which lives only in
+          # application-docker.yml.
+          health_url="https://${APP_HOST}${HEALTH_CHECK_PATH}"
+          deadline=$(( SECONDS + HEALTH_PROBE_TIMEOUT_SECONDS ))
+          attempt=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            attempt=$(( attempt + 1 ))
+            if body="$(curl -fsS --max-time "$HEALTH_PROBE_REQUEST_TIMEOUT_SECONDS" "$health_url")"; then
+              echo "Healthy after ${attempt} attempt(s), ${SECONDS}s."
+              printf '%s\n' "$body"
+              exit 0
+            fi
+            echo "  attempt ${attempt}: not ready yet (${SECONDS}s elapsed)"
+            sleep "$HEALTH_PROBE_INTERVAL_SECONDS"
+          done
+          echo "'${health_url}' did not answer within ${HEALTH_PROBE_TIMEOUT_SECONDS}s." >&2
+          echo "The image was set and the app restarted, so the container is" >&2
+          echo "either still pulling, crash-looping, or failing to pull at all." >&2
+          echo "An identity without AcrPull on the registry looks exactly like" >&2
+          echo "this. Read the container log:" >&2
+          echo "  az webapp log tail --resource-group ${RESOURCE_GROUP} --name ${APP_NAME}" >&2
+          exit 1

@@ -1,0 +1,16 @@
+############################ local #############################################
+## "local" profile
+
+## --------------- >>> logging <<< --------------------------------------------
+logging:
+  level:
+    root: "info"
+
+## --------------- >>> springdoc <<< ------------------------------------------
+##   Swagger UI  http://localhost:8080/swagger-ui.html
+##   OpenAPI     http://localhost:8080/v3/api-docs
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
