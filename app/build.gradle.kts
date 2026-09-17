@@ -602,7 +602,10 @@ spotless {
         // removeUnusedImports() or importOrder() step is configured. Adding an
         // importOrder() step here would run after this one and silently
         // override that ordering.
-        googleJavaFormat()
+        // Javadoc reflow is skipped: it rewraps comments to its own ~100
+        // column width, fighting the 80-column Javadoc wrapping this
+        // project's CLAUDE.md requires.
+        googleJavaFormat().skipJavadocFormatting()
         trimTrailingWhitespace()
         endWithNewline()
     }

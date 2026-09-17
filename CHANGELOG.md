@@ -36,6 +36,11 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Fixed
 
+- `app:spotlessJavaCheck` failed on the AI-disclaimer Javadoc: `googleJavaFormat()`
+  reflows Javadoc to its own ~100-column width, fighting the project's
+  80-column wrapping. Added `.skipJavadocFormatting()` to the Spotless
+  `googleJavaFormat()` step in `app/build.gradle.kts`.
+
 ## [0.0.2]
 
 ### Added
