@@ -30,7 +30,19 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Added
 
+- `plan-create` workflow: creates the Linux App Service Plan
+  (`plan-<workload>-<environment>`) if absent, with `sku` and `location`
+  inputs.
+- `plan-delete` workflow: deletes the App Service Plan, guarded by the actor
+  allowlist and `confirm` checkbox, matching `app-svc-delete`.
+- `docs/PRICING.md`: idle-provisioning cost reference for the project's
+  Azure resources.
+
 ### Changed
+
+- `app-svc-create-deploy` workflow: `plan_name` default changed to
+  `plan-rgomes-dev`, matching the naming convention introduced by
+  `plan-create`.
 
 ### Fixed
 

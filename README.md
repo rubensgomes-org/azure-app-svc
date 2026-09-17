@@ -46,6 +46,8 @@ Follow the instructions in [INITIAL_SETUP](docs/INITIAL_SETUP.md).
 | `release.yml`               | Cut a release: tag it and publish the GitHub Release            |
 | `acr-build-deploy.yml`      | Build the container image and push it to ACR                    |
 | `acr-repo-delete.yml`       | Delete an ACR repository, every tag and manifest with it        |
+| `plan-create.yml`           | Create the Linux App Service Plan                               |
+| `plan-delete.yml`           | Delete the App Service Plan, leaving its resource group alone   |
 | `app-svc-create-deploy.yml` | Create the App Service, or deploy the newest image to it        |
 | `app-svc-delete.yml`        | Delete the App Service, leaving its ACR repository alone        |
 

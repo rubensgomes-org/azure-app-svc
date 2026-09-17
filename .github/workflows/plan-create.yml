@@ -1,0 +1,234 @@
+# =============================================================================
+# plan-create
+#
+# Creates the Linux App Service Plan if it is absent. The counterpart to
+# plan-delete.yml. App Service Plans provisioned here are shared/platform
+# resources: app-svc-create-deploy.yml and app-svc-delete.yml consume an
+# EXISTING plan by name and never create or delete one.
+#
+# This project's source code and documentation were generated with the
+# assistance of Artificial Intelligence (AI). For more information, please
+# refer to the `AI_DISCLAIMER.md` document located in the project's root
+# directory.
+# =============================================================================
+name: plan-create
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: >
+          Environment token of both the resource group and the plan name.
+          With TF_VAR_WORKLOAD it forms rg-<workload>platform-<environment>
+          and plan-<workload>-<environment>. Check the resolved names in the
+          first step.
+        required: true
+        type: choice
+        options:
+          - dev
+          - lab
+      sku:
+        description: 'App Service Plan SKU, e.g. F1, B1, B2, S1.'
+        required: false
+        default: F1
+        type: string
+      location:
+        description: 'Azure region for the plan.'
+        required: false
+        default: centralus
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plan-create
+  cancel-in-progress: false
+
+jobs:
+  create-plan:
+    name: create-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      RESOURCE_GROUP: rg-${{ vars.TF_VAR_WORKLOAD }}platform-${{ inputs.environment }}
+      WORKLOAD: ${{ vars.TF_VAR_WORKLOAD }}
+      PLAN_NAME: plan-${{ vars.TF_VAR_WORKLOAD }}-${{ inputs.environment }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      SKU: ${{ inputs.sku }}
+      LOCATION: ${{ inputs.location }}
+
+    steps:
+      # No checkout: every step works from inputs and repository variables,
+      # and the actions it uses are remote.
+      - name: Resolve the deployment coordinates
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the deployment coordinates"
+          echo "=============================================================="
+          set -euo pipefail
+          if [ -z "${ENVIRONMENT:-}" ]; then
+            echo "The environment input resolved to empty." >&2
+            exit 1
+          fi
+          # An unset variable expands to empty and composes "rg-platform-<env>"
+          # and "plan-<env>" -- well-formed names for resources that do not
+          # exist, which Azure reports exactly as it reports genuinely wrong
+          # ones. Fail here instead, while the cause is still nameable.
+          if [ -z "${WORKLOAD:-}" ]; then
+            echo "The variable TF_VAR_WORKLOAD resolved to empty." >&2
+            echo "The resource group and plan names cannot be composed" >&2
+            echo "without it. Set it on this repository, or on the" >&2
+            echo "rubensgomes-org organization, as an Actions VARIABLE (not" >&2
+            echo "a secret). It MUST match the workload azure-iac" >&2
+            echo "provisioned the estate with -- see that repo's" >&2
+            echo "docs/NAMING.md. Nothing was created and Azure was never" >&2
+            echo "contacted." >&2
+            exit 1
+          fi
+          if [ -z "${SKU:-}" ]; then
+            echo "The sku input resolved to empty." >&2
+            exit 1
+          fi
+          if [ -z "${LOCATION:-}" ]; then
+            echo "The location input resolved to empty." >&2
+            exit 1
+          fi
+          echo "Target resource group:  ${RESOURCE_GROUP}"
+          echo "Target plan:            ${PLAN_NAME}"
+          echo "SKU:                    ${SKU}"
+          echo "Location:               ${LOCATION}"
+
+      - name: Sign in to Azure
+        uses: rubensgomes-org/azure-workflows/.github/actions/azure-login@v0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Deliberately "az appservice plan list" and not "show": "show" cannot
+      # distinguish "absent" from "the subscription could not be reached", so
+      # a transient outage would look like a missing plan and this run would
+      # create a second one -- or fail against a name that is already taken.
+      - name: Check whether the plan exists
+        id: exists
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Check whether the plan exists"
+          echo " az appservice plan list --resource-group ${RESOURCE_GROUP}"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! plans="$(az appservice plan list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list the App Service Plans in '${RESOURCE_GROUP}'." >&2
+            echo "That is a subscription- or resource-group-level failure --" >&2
+            echo "a network or token problem, a principal without read" >&2
+            echo "access, or a group that does not exist -- and NOT a" >&2
+            echo "missing plan. Nothing was created." >&2
+            exit 1
+          fi
+          # -F -x: whole line, literal. A substring match would let "plan-x"
+          # be satisfied by "plan-x-legacy".
+          if printf '%s\n' "$plans" | grep -Fxq "$PLAN_NAME"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Plan '${PLAN_NAME}' exists in '${RESOURCE_GROUP}'."
+            echo "Nothing to create; the create step will be skipped."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Plan '${PLAN_NAME}' is not in '${RESOURCE_GROUP}'."
+            echo "This run will create it."
+          fi
+
+      - name: Create the plan
+        if: steps.exists.outputs.exists == 'false'
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Create the plan"
+          echo " az appservice plan create --resource-group ${RESOURCE_GROUP} --name ${PLAN_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          # "--is-linux" is load-bearing: app-svc-create-deploy.yml deploys a
+          # container image, and a Windows plan silently discards it.
+          az appservice plan create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$PLAN_NAME" \
+            --location "$LOCATION" \
+            --sku "$SKU" \
+            --is-linux \
+            --output none
+          echo "Created '${PLAN_NAME}' (${SKU}, ${LOCATION}, Linux)."
+
+      # Reads the state back: a write that reported success but did not take
+      # effect must fail the run, not pass it.
+      - name: Verify the plan converged
+        shell: bash
+        env:
+          CREATED: ${{ steps.exists.outputs.exists == 'false' }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Verify the plan converged"
+          echo " az appservice plan show --resource-group ${RESOURCE_GROUP} --name ${PLAN_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+
+          failures=0
+
+          record_failure() {
+            printf 'FAIL  %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2
+            failures=$((failures + 1))
+          }
+          normalize() {
+            printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
+          }
+
+          if ! plans="$(az appservice plan list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list '${RESOURCE_GROUP}', so nothing here is" >&2
+            echo "proof of anything. Re-run to verify." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$plans" | grep -Fxq "$PLAN_NAME"; then
+            echo "'${PLAN_NAME}' is absent from '${RESOURCE_GROUP}' after the run." >&2
+            exit 1
+          fi
+
+          # The doubled brackets are load-bearing. "--output tsv" renders a
+          # top-level LIST one element per LINE, and SORTS the keys of a dict
+          # -- so "{k:v}" comes back in alphabetical order. Wrapping makes the
+          # result a list of ONE row, emitted tab-separated in the order
+          # written here.
+          plan="$(az appservice plan show --resource-group "$RESOURCE_GROUP" --name "$PLAN_NAME" \
+            --query "[[reserved, sku.name, location]]" \
+            --output tsv)"
+          IFS=$'\t' read -r reserved sku_name location <<< "$plan"
+
+          echo "Read back from Azure:"
+          echo "  reserved (Linux): ${reserved}"
+          echo "  sku:              ${sku_name}"
+          echo "  location:         ${location}"
+          echo ""
+
+          if [ "$(normalize "$reserved")" != "true" ]; then
+            record_failure "reserved (Linux)" "true" "$reserved"
+          fi
+          if [ "$(normalize "$sku_name")" != "$(normalize "$SKU")" ]; then
+            record_failure "sku" "$SKU" "$sku_name"
+          fi
+          if [ "$(normalize "$location")" != "$(normalize "$LOCATION")" ]; then
+            record_failure "location" "$LOCATION" "$location"
+          fi
+
+          if [ "$failures" -gt 0 ]; then
+            echo "" >&2
+            echo "${failures} assertion(s) failed. The plan is NOT in the" >&2
+            echo "requested state." >&2
+            exit 1
+          fi
+          if [ "$CREATED" = "true" ]; then
+            echo "Created and verified '${PLAN_NAME}'."
+          else
+            echo "'${PLAN_NAME}' already existed and matches the requested state."
+          fi

@@ -32,13 +32,15 @@ on:
           - lab
       plan_name:
         description: >
-          Name of the EXISTING Linux App Service Plan. It is resolved to a
-          resource id across the whole subscription, so it does not need to be
-          in the app's resource group -- and it is not. The plan also decides
-          the app's region.
-        required: false
-        default: asp-biceplab-dev-centralus
-        type: string
+          Name of the EXISTING Linux App Service Plan, created by
+          plan-create.yml. It is resolved to a resource id across the whole
+          subscription, so it does not need to be in the app's resource group
+          -- and it is not. The plan also decides the app's region.
+        required: true
+        type: choice
+        options:
+          - plan-rgomes-dev
+          - plan-rgomes-lab
       identity_name:
         description: >
           Name of the EXISTING user-assigned managed identity used to pull from
@@ -159,6 +161,44 @@ jobs:
           client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Deliberately "az appservice plan list" and not "show": "show" needs a
+      # resource group, and the plan_name input's own description already
+      # establishes the plan does not live in the app's group. "list" is also
+      # what distinguishes "absent" from "the subscription could not be
+      # reached", the same reasoning as the identity and app-existence checks
+      # below.
+      - name: Check whether the plan exists
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Check whether the plan exists"
+          echo " az appservice plan list  (filtered on name ${PLAN_NAME})"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! matches="$(az appservice plan list \
+              --query "[?name=='${PLAN_NAME}'].id" \
+              --output tsv)"; then
+            echo "Could not list the App Service Plans in this subscription." >&2
+            echo "That is a subscription-level failure -- a network or token" >&2
+            echo "problem, or a principal without read access -- and NOT a" >&2
+            echo "missing plan. Nothing was created." >&2
+            exit 1
+          fi
+          match_count="$(printf '%s\n' "$matches" | grep -c '[^[:space:]]' || true)"
+          if [ "$match_count" -eq 0 ]; then
+            echo "No App Service Plan named '${PLAN_NAME}' is visible." >&2
+            echo "Run plan-create.yml to create it first. Nothing was" >&2
+            echo "created." >&2
+            exit 1
+          fi
+          if [ "$match_count" -gt 1 ]; then
+            echo "'${PLAN_NAME}' names ${match_count} plans:" >&2
+            printf '%s\n' "$matches" | sed 's/^/  /' >&2
+            echo "Refusing to guess which one should host the app." >&2
+            exit 1
+          fi
+          echo "Plan '${PLAN_NAME}' exists: ${matches}"
 
       - name: Verify the ACR registry
         id: registry

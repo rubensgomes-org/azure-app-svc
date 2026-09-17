@@ -1,0 +1,226 @@
+# =============================================================================
+# plan-delete
+#
+# DESTRUCTIVE. Deletes the Linux App Service Plan and nothing else. Its
+# resource group is left alone. Azure refuses to delete a plan that still has
+# App Services on it -- delete those first with app-svc-delete.yml. A plan has
+# no soft-delete and no recycle bin.
+#
+# This project's source code and documentation were generated with the
+# assistance of Artificial Intelligence (AI). For more information, please
+# refer to the `AI_DISCLAIMER.md` document located in the project's root
+# directory.
+# =============================================================================
+name: plan-delete
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: >
+          Environment token of both the resource group and the plan name.
+          With TF_VAR_WORKLOAD it forms rg-<workload>platform-<environment>
+          and plan-<workload>-<environment>. Check the resolved names in the
+          first step before confirming.
+        required: true
+        type: choice
+        options:
+          - dev
+          - lab
+      confirm:
+        description: >
+          THE APP SERVICE PLAN IS DELETED PERMANENTLY. There is no
+          soft-delete and no recycle bin. Its resource group is NOT touched.
+          Check this box to confirm.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plan-delete
+  cancel-in-progress: false
+
+jobs:
+  delete-plan:
+    name: delete-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      RESOURCE_GROUP: rg-${{ vars.TF_VAR_WORKLOAD }}platform-${{ inputs.environment }}
+      WORKLOAD: ${{ vars.TF_VAR_WORKLOAD }}
+      PLAN_NAME: plan-${{ vars.TF_VAR_WORKLOAD }}-${{ inputs.environment }}
+      ENVIRONMENT: ${{ inputs.environment }}
+      ALLOWED_ACTOR: 'rubensgomes,rubens-gomes_3CC'
+
+    steps:
+      # No checkout: every step works from inputs and repository variables,
+      # and the actions it uses are remote.
+      - name: Resolve the deployment coordinates
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Resolve the deployment coordinates"
+          echo "=============================================================="
+          set -euo pipefail
+          if [ -z "${ENVIRONMENT:-}" ]; then
+            echo "The environment input resolved to empty." >&2
+            exit 1
+          fi
+          # An unset variable expands to empty and composes "rg-platform-<env>"
+          # and "plan-<env>" -- well-formed names for resources that do not
+          # exist, which Azure reports exactly as it reports genuinely wrong
+          # ones. Fail here instead, while the cause is still nameable.
+          if [ -z "${WORKLOAD:-}" ]; then
+            echo "The variable TF_VAR_WORKLOAD resolved to empty." >&2
+            echo "The resource group and plan names cannot be composed" >&2
+            echo "without it. Set it on this repository, or on the" >&2
+            echo "rubensgomes-org organization, as an Actions VARIABLE (not" >&2
+            echo "a secret). It MUST match the workload azure-iac" >&2
+            echo "provisioned the estate with -- see that repo's" >&2
+            echo "docs/NAMING.md. Nothing was deleted and Azure was never" >&2
+            echo "contacted." >&2
+            exit 1
+          fi
+          echo "Target plan:            ${PLAN_NAME}"
+          echo "Target resource group:  ${RESOURCE_GROUP}"
+
+      # MUST stay ahead of the sign-in step, so a denial can truthfully report
+      # that Azure was never contacted.
+      - name: SAFEGUARD - Validate actor and confirmation
+        shell: bash
+        env:
+          ACTOR: ${{ github.actor }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: SAFEGUARD - Validate actor and confirmation"
+          echo "=============================================================="
+          set -euo pipefail
+          # Split on commas and spaces so the list can carry one login or
+          # several. Matching stays exact per login: a substring match would
+          # let "rubensgomes-bot" pass as "rubensgomes".
+          IFS=', ' read -r -a allowed_actors <<< "$ALLOWED_ACTOR"
+          permitted=0
+          for login in "${allowed_actors[@]}"; do
+            if [ "$ACTOR" = "$login" ]; then
+              permitted=1
+              break
+            fi
+          done
+          if [ "$permitted" -ne 1 ]; then
+            echo "Denied: only '${ALLOWED_ACTOR}' may run this workflow." >&2
+            echo "Actor: '${ACTOR}'." >&2
+            exit 1
+          fi
+          if [ "$CONFIRM" != "true" ]; then
+            echo "Denied: the confirm checkbox was not checked." >&2
+            echo "Nothing was deleted and Azure was never contacted." >&2
+            exit 1
+          fi
+          echo "Safeguard passed. This run will delete:"
+          echo "  Plan: ${PLAN_NAME} (resource group ${RESOURCE_GROUP})"
+          echo "Nothing else is touched -- not the resource group."
+
+      - name: Sign in to Azure
+        uses: rubensgomes-org/azure-workflows/.github/actions/azure-login@v0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Deliberately "az appservice plan list" and not "show": "show" cannot
+      # distinguish "absent" from "the subscription could not be reached", so
+      # a transient outage would look like a successful no-op and the run
+      # would go green having deleted nothing.
+      - name: Check whether the plan exists
+        id: exists
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Check whether the plan exists"
+          echo " az appservice plan list --resource-group ${RESOURCE_GROUP}"
+          echo "=============================================================="
+          set -euo pipefail
+          if ! plans="$(az appservice plan list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "Could not list the App Service Plans in '${RESOURCE_GROUP}'." >&2
+            echo "That is a subscription- or resource-group-level failure --" >&2
+            echo "a network or token problem, a principal without read" >&2
+            echo "access, or a group that does not exist -- and NOT a" >&2
+            echo "missing plan. Nothing was deleted." >&2
+            exit 1
+          fi
+          # -F -x: whole line, literal. A substring match would let "plan-x"
+          # be satisfied by "plan-x-legacy".
+          if ! printf '%s\n' "$plans" | grep -Fxq "$PLAN_NAME"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Plan '${PLAN_NAME}' is not in '${RESOURCE_GROUP}'."
+            echo "Nothing to delete; the delete step will be skipped."
+            exit 0
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "Plan '${PLAN_NAME}' exists and will be PERMANENTLY deleted."
+
+      - name: Delete the plan
+        if: steps.exists.outputs.exists == 'true'
+        shell: bash
+        run: |
+          echo "=============================================================="
+          echo " STEP: Delete the plan"
+          echo " az appservice plan delete --resource-group ${RESOURCE_GROUP} --name ${PLAN_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          # Azure refuses this outright, with a clear error naming the app,
+          # if an App Service is still hosted on the plan -- not
+          # special-cased here. "--yes" skips the interactive confirmation
+          # prompt, which a non-interactive runner can never answer.
+          az appservice plan delete \
+            --resource-group "${RESOURCE_GROUP}" \
+            --name "${PLAN_NAME}" \
+            --yes
+
+      # Reads the state back: a delete that reported success but left the
+      # plan behind must fail the run, not pass it.
+      - name: Verify the plan no longer exists
+        shell: bash
+        env:
+          EXISTED: ${{ steps.exists.outputs.exists }}
+        run: |
+          echo "=============================================================="
+          echo " STEP: Verify the plan no longer exists"
+          echo " az appservice plan show --resource-group ${RESOURCE_GROUP} --name ${PLAN_NAME}"
+          echo "=============================================================="
+          set -euo pipefail
+          if show_output="$(az appservice plan show --resource-group "${RESOURCE_GROUP}" --name "${PLAN_NAME}" 2>&1)"; then
+            printf '%s\n' "$show_output"
+            echo "" >&2
+            echo "Plan '${PLAN_NAME}' is STILL in '${RESOURCE_GROUP}'." >&2
+            echo "The delete step reported success, so it did not take effect." >&2
+            exit 1
+          fi
+          echo "'az appservice plan show' failed, which is what a deleted plan looks like:"
+          # sed, not ${var//}, because this indents EVERY line.
+          # shellcheck disable=SC2001
+          printf '%s\n' "$show_output" | sed 's/^/  /'
+          echo ""
+          # A non-zero "show" is ALSO what an expired token or a network
+          # failure looks like, so absence is only believed once the group
+          # lists cleanly.
+          if ! plans="$(az appservice plan list --resource-group "$RESOURCE_GROUP" --query "[].name" --output tsv)"; then
+            echo "But '${RESOURCE_GROUP}' could not be listed either, so the" >&2
+            echo "failure above is not proof of absence. Re-run to verify." >&2
+            exit 1
+          fi
+          if printf '%s\n' "$plans" | grep -Fxq "$PLAN_NAME"; then
+            echo "'${PLAN_NAME}' is absent from 'show' but present in 'list'." >&2
+            echo "The deletion is not complete. Re-run to verify." >&2
+            exit 1
+          fi
+          if [ "$EXISTED" = "true" ]; then
+            echo "Deleted. '${PLAN_NAME}' is gone from '${RESOURCE_GROUP}'."
+          else
+            echo "Nothing was deleted. '${PLAN_NAME}' was already absent from '${RESOURCE_GROUP}'."
+          fi
