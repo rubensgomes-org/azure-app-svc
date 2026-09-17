@@ -32,4 +32,7 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Changed
 
+- `app-svc-delete` workflow: `confirm` input is now a checkbox (boolean)
+  instead of a typed confirmation phrase, matching `acr-repo-delete`.
+
 ### Fixed

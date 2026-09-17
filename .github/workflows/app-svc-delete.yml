@@ -19,7 +19,7 @@ on:
       app_name:
         description: 'Name of the App Service (web app) to delete. Its plan and resource group are left alone.'
         required: false
-        default: azure-app-svc
+        default: app-rgomes-dev
         type: string
       environment:
         description: >
@@ -34,11 +34,10 @@ on:
       confirm:
         description: >
           THE APP SERVICE IS DELETED PERMANENTLY. There is no soft-delete and
-          no recycle bin. Its ACR repository is NOT touched.
-          SAFEGUARD: type EXACTLY "DELETE APP <environment>/<app_name>" --
-          e.g. DELETE APP lab/azure-app-svc
+          no recycle bin. Its ACR repository is NOT touched. Check this box
+          to confirm.
         required: true
-        type: string
+        type: boolean
 
 permissions:
   contents: read
@@ -64,7 +63,6 @@ jobs:
       # No checkout: every step works from inputs and repository variables,
       # and the actions it uses are remote.
       - name: Resolve the deployment coordinates
-        id: target
         shell: bash
         run: |
           echo "=============================================================="
@@ -93,21 +91,19 @@ jobs:
             echo "The app_name input resolved to empty." >&2
             exit 1
           fi
-          echo "target=${ENVIRONMENT}/${APP_NAME}" >> "$GITHUB_OUTPUT"
           echo "Target App Service:     ${APP_NAME}"
           echo "Target resource group:  ${RESOURCE_GROUP}"
 
       # MUST stay ahead of the sign-in step, so a denial can truthfully report
       # that Azure was never contacted.
-      - name: SAFEGUARD - Validate actor and confirmation phrase
+      - name: SAFEGUARD - Validate actor and confirmation
         shell: bash
         env:
           ACTOR: ${{ github.actor }}
-          TARGET: ${{ steps.target.outputs.target }}
-          TYPED_CONFIRM: ${{ inputs.confirm }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           echo "=============================================================="
-          echo " STEP: SAFEGUARD - Validate actor and confirmation phrase"
+          echo " STEP: SAFEGUARD - Validate actor and confirmation"
           echo "=============================================================="
           set -euo pipefail
           # Split on commas and spaces so the list can carry one login or
@@ -126,14 +122,8 @@ jobs:
             echo "Actor: '${ACTOR}'." >&2
             exit 1
           fi
-          # Built from the RESOLVED target, so the phrase proves the caller
-          # knows what will actually be deleted.
-          expected_phrase="DELETE APP ${TARGET}"
-          if [ "$TYPED_CONFIRM" != "$expected_phrase" ]; then
-            echo "Denied: confirmation phrase did not match exactly." >&2
-            echo "Expected: ${expected_phrase}" >&2
-            echo "Got:      ${TYPED_CONFIRM}" >&2
-            echo "" >&2
+          if [ "$CONFIRM" != "true" ]; then
+            echo "Denied: the confirm checkbox was not checked." >&2
             echo "Nothing was deleted and Azure was never contacted." >&2
             exit 1
           fi

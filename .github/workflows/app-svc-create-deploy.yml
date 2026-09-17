@@ -17,7 +17,7 @@ on:
       app_name:
         description: 'Name of the App Service (web app) to create or deploy to.'
         required: false
-        default: appsvc
+        default: app-rgomes-dev
         type: string
       environment:
         description: >
