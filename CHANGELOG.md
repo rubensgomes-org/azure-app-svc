@@ -32,6 +32,8 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Changed
 
+- Released `v0.0.2`.
+
 ### Fixed
 
 ## [0.0.2]
