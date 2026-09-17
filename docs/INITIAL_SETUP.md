@@ -41,6 +41,18 @@ The workflows in this repository read an Action secret named
    Repo's Settings -- Secrets and variables -- Actions -- New repository secret
    ```
 
+### SONAR_TOKEN
+
+The workflows in this repository read an Action secret named
+`SONAR_TOKEN` which is used during SonarQube analysis.
+
+- Create an Action repository secret in this repository and name it
+  SONAR_TOKEN storing the SonarQube authentication token:
+
+   ```text
+   Repo's Settings -- Secrets and variables -- Actions -- New repository secret
+   ```
+
 ## GitHub Actions Variables
 
 ### AZURE_CLIENT_ID
@@ -86,6 +98,19 @@ with, since that repository owns the naming. See its `docs/NAMING.md`.
 
 - Create an Action repository variable in this repository and name it
   TF_VAR_WORKLOAD storing the workload token (e.g., rgomes):
+
+   ```text
+   Repo's Settings -- Secrets and variables -- Actions -- New repository variable
+   ```
+
+### TF_VAR_OWNER
+
+The workflows in this repository read an Action variable named
+`TF_VAR_OWNER` which is applied as an `owner` tag on created
+resources.
+
+- Create an Action repository variable in this repository and name it
+  TF_VAR_OWNER storing the resource owner (e.g., an email address):
 
    ```text
    Repo's Settings -- Secrets and variables -- Actions -- New repository variable
