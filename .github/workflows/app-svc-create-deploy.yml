@@ -519,13 +519,21 @@ jobs:
           # -- so "[a,b,c]" cannot be read positionally and "{k:v}" comes back
           # in alphabetical order. Wrapping makes the result a list of ONE row,
           # which is emitted tab-separated in the order written here.
+          #
+          # "properties." is load-bearing on every field below except
+          # "location" and "tags": the SDK model exposes state, httpsOnly,
+          # defaultHostName, etc. as top-level Python convenience attributes,
+          # but the JSON this CLI emits only carries them nested under
+          # "properties" -- querying them unprefixed always reads back null.
+          # The plan's resource id is "properties.serverFarmId", never
+          # "appServicePlanId" (not a field on this resource at all).
           site="$(az webapp show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
-            --query "[[state, httpsOnly, appServicePlanId, location, defaultHostName, tags.owner]]" \
+            --query "[[properties.state, properties.httpsOnly, properties.serverFarmId, location, properties.defaultHostName, tags.owner]]" \
             --output tsv)"
           IFS=$'\t' read -r state https_only plan_id location host owner_tag <<< "$site"
 
           config="$(az webapp config show --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
-            --query "[[linuxFxVersion, healthCheckPath, acrUseManagedIdentityCreds]]" \
+            --query "[[properties.linuxFxVersion, properties.healthCheckPath, properties.acrUseManagedIdentityCreds]]" \
             --output tsv)"
           IFS=$'\t' read -r linux_fx health_path acr_identity_creds <<< "$config"
           # A property Azure has never been given renders as the string "None",

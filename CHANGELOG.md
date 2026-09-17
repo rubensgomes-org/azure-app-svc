@@ -54,11 +54,16 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Fixed
 
-- `plan-create` workflow: "Verify the plan converged" now polls
-  `az appservice plan show` for up to two minutes instead of reading once.
-  `reserved` (the Linux flag) was observed to still read back `null` well
-  after `create` reported success, while `sku` and `location` were already
-  correct, failing the run against a plan that had, in fact, converged.
+- `plan-create` workflow: "Verify the plan converged" queried `reserved` at
+  the top level of `az appservice plan show`, which this CLI version never
+  populates there; the Linux flag only appears under `properties.reserved`.
+  The query now reads `properties.reserved`, and the plan already converges
+  on the first read.
+- `app-svc-create-deploy` workflow: "Verify the App Service converged" had
+  the same bug for `state`, `httpsOnly`, `defaultHostName`,
+  `linuxFxVersion`, `healthCheckPath`, and `acrUseManagedIdentityCreds`, and
+  queried a nonexistent `appServicePlanId` field instead of
+  `properties.serverFarmId`. All six now read from `properties`.
 
 ## [0.0.0]
 
