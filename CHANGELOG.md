@@ -30,6 +30,14 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.3]
+
+### Added
+
 - `scripts/initvars.sh`: resets this repository's GitHub Actions variables
   and secrets from the current shell environment.
 - `docs/INITIAL_SETUP.md`: documented the previously-missing `SONAR_TOKEN`
