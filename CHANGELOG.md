@@ -32,6 +32,14 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Changed
 
+### Fixed
+
+## [0.0.4]
+
+### Added
+
+### Changed
+
 - `acr-repo-delete.yml` now passes `artifact-id: azure-app-svc` to the
   reusable `acr-repo-delete` workflow, which requires it as an input instead
   of reading `app/gradle.properties`.
