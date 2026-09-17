@@ -30,6 +30,14 @@ and one that still holds only the empty `### Added` / `### Changed` /
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.1]
+
+### Added
+
 - `plan-create` workflow: creates the Linux App Service Plan
   (`plan-<workload>-<environment>`) if absent, with `sku` and `location`
   inputs.
@@ -45,6 +53,12 @@ and one that still holds only the empty `### Added` / `### Changed` /
   `plan-create`.
 
 ### Fixed
+
+- `plan-create` workflow: "Verify the plan converged" now polls
+  `az appservice plan show` for up to two minutes instead of reading once.
+  `reserved` (the Linux flag) was observed to still read back `null` well
+  after `create` reported success, while `sku` and `location` were already
+  correct, failing the run against a plan that had, in fact, converged.
 
 ## [0.0.0]
 

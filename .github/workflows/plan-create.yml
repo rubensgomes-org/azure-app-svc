@@ -163,11 +163,17 @@ jobs:
           echo "Created '${PLAN_NAME}' (${SKU}, ${LOCATION}, Linux)."
 
       # Reads the state back: a write that reported success but did not take
-      # effect must fail the run, not pass it.
+      # effect must fail the run, not pass it. Polled rather than read once:
+      # "reserved" has been observed to still read back null tens of seconds
+      # after "create" returns success, while "sku" and "location" are
+      # already correct -- ARM propagates the Linux flag to the read path
+      # slower than the rest of the resource.
       - name: Verify the plan converged
         shell: bash
         env:
           CREATED: ${{ steps.exists.outputs.exists == 'false' }}
+          PLAN_VERIFY_TIMEOUT_SECONDS: '120'
+          PLAN_VERIFY_INTERVAL_SECONDS: '15'
         run: |
           echo "=============================================================="
           echo " STEP: Verify the plan converged"
@@ -175,12 +181,6 @@ jobs:
           echo "=============================================================="
           set -euo pipefail
 
-          failures=0
-
-          record_failure() {
-            printf 'FAIL  %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2
-            failures=$((failures + 1))
-          }
           normalize() {
             printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'
           }
@@ -195,21 +195,44 @@ jobs:
             exit 1
           fi
 
-          # The doubled brackets are load-bearing. "--output tsv" renders a
-          # top-level LIST one element per LINE, and SORTS the keys of a dict
-          # -- so "{k:v}" comes back in alphabetical order. Wrapping makes the
-          # result a list of ONE row, emitted tab-separated in the order
-          # written here.
-          plan="$(az appservice plan show --resource-group "$RESOURCE_GROUP" --name "$PLAN_NAME" \
-            --query "[[reserved, sku.name, location]]" \
-            --output tsv)"
-          IFS=$'\t' read -r reserved sku_name location <<< "$plan"
+          deadline=$(( SECONDS + PLAN_VERIFY_TIMEOUT_SECONDS ))
+          attempt=0
+          while :; do
+            attempt=$(( attempt + 1 ))
 
-          echo "Read back from Azure:"
+            # The doubled brackets are load-bearing. "--output tsv" renders a
+            # top-level LIST one element per LINE, and SORTS the keys of a
+            # dict -- so "{k:v}" comes back in alphabetical order. Wrapping
+            # makes the result a list of ONE row, emitted tab-separated in
+            # the order written here.
+            plan="$(az appservice plan show --resource-group "$RESOURCE_GROUP" --name "$PLAN_NAME" \
+              --query "[[reserved, sku.name, location]]" \
+              --output tsv)"
+            IFS=$'\t' read -r reserved sku_name location <<< "$plan"
+
+            if [ "$(normalize "$reserved")" = "true" ] \
+              && [ "$(normalize "$sku_name")" = "$(normalize "$SKU")" ] \
+              && [ "$(normalize "$location")" = "$(normalize "$LOCATION")" ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              break
+            fi
+            echo "  attempt ${attempt}: not converged yet (${SECONDS}s elapsed), retrying..."
+            sleep "$PLAN_VERIFY_INTERVAL_SECONDS"
+          done
+
+          echo "Read back from Azure after ${attempt} attempt(s):"
           echo "  reserved (Linux): ${reserved}"
           echo "  sku:              ${sku_name}"
           echo "  location:         ${location}"
           echo ""
+
+          failures=0
+          record_failure() {
+            printf 'FAIL  %s\n  expected: %s\n  actual:   %s\n' "$1" "$2" "$3" >&2
+            failures=$((failures + 1))
+          }
 
           if [ "$(normalize "$reserved")" != "true" ]; then
             record_failure "reserved (Linux)" "true" "$reserved"
@@ -223,8 +246,8 @@ jobs:
 
           if [ "$failures" -gt 0 ]; then
             echo "" >&2
-            echo "${failures} assertion(s) failed. The plan is NOT in the" >&2
-            echo "requested state." >&2
+            echo "${failures} assertion(s) failed after ${PLAN_VERIFY_TIMEOUT_SECONDS}s." >&2
+            echo "The plan is NOT in the requested state." >&2
             exit 1
           fi
           if [ "$CREATED" = "true" ]; then
