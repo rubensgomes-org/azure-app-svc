@@ -39,8 +39,6 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v7
 
-      # The version comes from the build and the tag is derived from it. Both
-      # are validated before anything downstream runs.
       - name: Resolve the version and tag
         id: resolve
         shell: bash
@@ -82,7 +80,6 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}"         >> "$GITHUB_OUTPUT"
 
-      # The whole reason this job exists. See the header.
       - name: Verify the CHANGELOG section exists and is not empty
         shell: bash
         env:
@@ -146,7 +143,6 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
 
     steps:
-      # SHA-pinned security reasons
       - name: Check out the release tag
         uses: actions/checkout@v7
         with:
