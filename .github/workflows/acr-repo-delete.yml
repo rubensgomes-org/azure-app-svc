@@ -31,11 +31,10 @@ on:
       confirm:
         description: >
           EVERY TAG AND MANIFEST IN THE REPOSITORY IS DELETED PERMANENTLY.
-          There is no soft-delete and no recycle bin. Type the exact phrase
-          "DELETE REPO <registry_name> <environment>/azure-app-svc" to
-          confirm.
+          There is no soft-delete and no recycle bin. Push anything you care
+          about elsewhere first. Check this box to confirm.
         required: true
-        type: string
+        type: boolean
 
 permissions:
   contents: read
@@ -51,7 +50,7 @@ jobs:
       environment: ${{ inputs.environment }}
       registry-name: ${{ inputs.registry_name }}
       artifact-id: azure-app-svc
-      confirm: ${{ inputs.confirm }}
+      confirm: ${{ inputs.confirm && format('DELETE REPO {0} {1}/azure-app-svc', inputs.registry_name, inputs.environment) || '' }}
       azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
       azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
       azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
