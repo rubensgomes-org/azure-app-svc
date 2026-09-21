@@ -264,14 +264,14 @@ jobs:
               --repository "$REPOSITORY" \
               --output tsv)"; then
             echo "Repository '${REPOSITORY}' is not in registry '${REGISTRY_NAME}'." >&2
-            echo "Run the acr-build-deploy workflow to push an image first," >&2
+            echo "Run the acr-build-push workflow to push an image first," >&2
             echo "or correct the environment or registry_name input." >&2
             echo "Nothing was created." >&2
             exit 1
           fi
           if [ -z "$(printf '%s' "$tags" | tr -d '[:space:]')" ]; then
             echo "Repository '${REPOSITORY}' exists but holds no tags." >&2
-            echo "Run the acr-build-deploy workflow to push an image first." >&2
+            echo "Run the acr-build-push workflow to push an image first." >&2
             echo "Nothing was created." >&2
             exit 1
           fi

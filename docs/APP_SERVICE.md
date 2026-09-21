@@ -13,7 +13,7 @@ it dies. There is no host to log into and nothing to keep current.
 
 For this project the unit of deployment is the image `az acr build` already
 pushes to `crrgomeslab02` — App Service pulls it directly from the registry, so
-the ACR workflow in `.github/workflows/acr-build-deploy.yml` is the entire
+the ACR workflow in `.github/workflows/acr-build-push.yml` is the entire
 build half of the pipeline.
 
 ### Why App Service

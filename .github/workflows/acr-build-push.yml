@@ -1,5 +1,5 @@
 # =============================================================================
-# acr-build-deploy (azure-app-svc)
+# acr-build-push (azure-app-svc)
 #
 # Builds the application and its container image, pushes the image to an
 # EXISTING Azure Container Registry, verifies the push, smoke-tests the image
@@ -13,7 +13,7 @@
 # refer to the `AI_DISCLAIMER.md` document located in the project's root
 # directory.
 # =============================================================================
-name: acr-build-deploy (azure-app-svc)
+name: acr-build-push (azure-app-svc)
 
 on:
   workflow_dispatch:
@@ -41,12 +41,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: acr-build-deploy
+  group: acr-build-push
   cancel-in-progress: false
 
 jobs:
   build:
-    uses: rubensgomes-org/azure-workflows/.github/workflows/acr-build-deploy-java.yml@v0
+    uses: rubensgomes-org/azure-workflows/.github/workflows/acr-build-push-java.yml@v0
     with:
       environment: ${{ inputs.environment }}
       tag: ${{ inputs.tag }}

@@ -44,7 +44,7 @@ Follow the instructions in [INITIAL_SETUP](docs/INITIAL_SETUP.md).
 |-----------------------------|-----------------------------------------------------------------|
 | `build-verify.yml`          | Build, test and check the project, then block on the Sonar gate |
 | `release.yml`               | Cut a release: tag it and publish the GitHub Release            |
-| `acr-build-deploy.yml`      | Build the container image and push it to ACR                    |
+| `acr-build-push.yml`        | Build the container image and push it to ACR                    |
 | `acr-repo-delete.yml`       | Delete an ACR repository, every tag and manifest with it        |
 | `plan-create.yml`           | Create the Linux App Service Plan                               |
 | `plan-delete.yml`           | Delete the App Service Plan, leaving its resource group alone   |

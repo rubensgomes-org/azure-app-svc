@@ -91,7 +91,7 @@ library or framework version requires regenerating the lock files.
 | `./gradlew :app:dependencies --write-locks` | Regenerate the `:app` dependency lock files          |
 | `gh workflow run build-verify.yml`          | Run the build + Sonar gate in CI                     |
 | `gh workflow run release.yml`               | Cut a release: check changelog, tag, publish Release |
-| `gh workflow run acr-build-deploy.yml`      | Build and push the image to ACR                      |
+| `gh workflow run acr-build-push.yml`        | Build and push the image to ACR                      |
 | `gh workflow run app-svc-create-deploy.yml` | Create the App Service, or deploy the newest image   |
 | `gh workflow run app-svc-delete.yml`        | **Delete** the App Service, not its ACR repository   |
 | `docker compose up --build -d`              | Build and run the image — `./gradlew build` first    |
