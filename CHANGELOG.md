@@ -30,6 +30,11 @@ rename.
 
 ### Changed
 
+- `acr-build-deploy.yml` renamed to `acr-build-push.yml`, and the reusable
+  workflow it calls updated to `acr-build-push-java.yml`; references in
+  `app-svc-create-deploy.yml`, `README.md`, `docs/APP_SERVICE.md`, and
+  `docs/DEVELOPMENT_WORKFLOW.md` updated to match.
+
 ### Fixed
 
 ## [0.0.5] - 2026-09-18
