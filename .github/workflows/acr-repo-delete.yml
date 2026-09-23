@@ -9,7 +9,7 @@
 # refer to the `AI_DISCLAIMER.md` document located in the project's root
 # directory.
 # =============================================================================
-name: acr-repo-delete (azure-app-svc)
+name: repo-delete
 
 on:
   workflow_dispatch:

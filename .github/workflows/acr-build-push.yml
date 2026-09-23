@@ -1,5 +1,5 @@
 # =============================================================================
-# acr-build-push (azure-app-svc)
+# acr-build-push
 #
 # Builds the application and its container image, pushes the image to an
 # EXISTING Azure Container Registry, verifies the push, smoke-tests the image
@@ -13,7 +13,7 @@
 # refer to the `AI_DISCLAIMER.md` document located in the project's root
 # directory.
 # =============================================================================
-name: acr-build-push (azure-app-svc)
+name: build-push
 
 on:
   workflow_dispatch:
