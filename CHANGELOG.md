@@ -28,6 +28,14 @@ rename.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.7] - 2026-09-23
+
+### Added
+
 - `.github/dependabot.yml` with daily version updates for Gradle, Docker,
   and GitHub Actions.
 
