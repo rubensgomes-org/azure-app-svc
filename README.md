@@ -1,8 +1,16 @@
-[![AI Assisted](https://img.shields.io/badge/AI--Assisted-Development-007ACC?logo=openai&logoColor=white)](./AI_DISCLAIMER.md)
+# Azure App Service
 
-# azure-app-svc
+[![jdk](https://img.shields.io/badge/jdk-25-0969da?logo=openjdk)](https://openjdk.org/projects/jdk/25/)
+[![gradle](https://img.shields.io/badge/gradle-9.8%2B-0969da?logo=gradle)](https://gradle.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1%2B-0969da?logo=spring)](https://spring.io/projects/spring-boot#overview)
+[![GitHub](https://img.shields.io/badge/GitHub-Actions-0969da?logo=github+actions)](https://github.com/features/actions)
+[![Microsoft](https://img.shields.io/badge/Microsoft-Azure-0969da)](https://azure.microsoft.com/en-us)
+[![AI](https://img.shields.io/badge/AI-Assisted-d29922?logo=claude+code)](https://github.com/rubensgomes-org/azure-app-svc/blob/main/AI_DISCLAIMER.md)
+[![license](https://img.shields.io/badge/license-MIT-1a7f37)](https://github.com/rubensgomes-org/azure-app-svc/blob/main/LICENSE)
 
 Spring Boot demo deployed to Azure App Service.
+
+---
 
 ## AI Disclaimer
 
@@ -51,10 +59,19 @@ Follow the instructions in [INITIAL_SETUP](docs/INITIAL_SETUP.md).
 | `app-svc-create-deploy.yml` | Create the App Service, or deploy the newest image to it        |
 | `app-svc-delete.yml`        | Delete the App Service, leaving its ACR repository alone        |
 
-## Development Workflow
+## License
 
-See [DEVELOPMENT_WORKFLOW](./docs/DEVELOPMENT_WORKFLOW.md) for guidance on
-developing, and cutting a release on this project.
+This project is licensed under the
+[MIT License](https://github.com/rubensgomes-org/azure-app-svc/blob/main/LICENSE).
+
+## Links
+
+- [GitHub Project](https://github.com/rubensgomes-org/azure-app-svc)
+- [Azure App Service](docs/APP_SERVICE.md)
+- [Azure Commands](docs/AZ_CMDS.md)
+- [Azure Consumption Pricing](docs/PRICING.md)
+- [Development Workflow](docs/DEVELOPMENT_WORKFLOW.md)
+- [Initial Setup](docs/INITIAL_SETUP.md)
 
 ---
 Author:  [Rubens Gomes](https://rubensgomes.com/)
