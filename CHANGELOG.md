@@ -28,7 +28,13 @@ rename.
 
 ### Added
 
+- MIT `LICENSE`.
+- README badges, License, and Links sections.
+
 ### Changed
+
+- `AI_DISCLAIMER.md` adds third-party, copyright, and liability notices.
+- Shortened `acr-build-push` and `acr-repo-delete` workflow display names.
 
 ### Fixed
 
