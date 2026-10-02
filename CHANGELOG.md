@@ -28,6 +28,14 @@ rename.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [0.0.8] - 2026-10-02
+
+### Added
+
 - MIT `LICENSE`.
 - README badges, License, and Links sections.
 
